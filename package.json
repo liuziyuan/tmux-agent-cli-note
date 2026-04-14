@@ -1,0 +1,26 @@
+{
+  "name": "tmux-agent-cli-note",
+  "version": "0.1.0",
+  "description": "Vim-like brainstorm note tool for tmux, sends notes to AI CLI agents (Claude Code, OpenCode, Codex)",
+  "bin": {
+    "note": "./bin/note.js"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "keywords": [
+    "tmux",
+    "note",
+    "claude",
+    "claude-code",
+    "opencode",
+    "codex",
+    "vim",
+    "brainstorm"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
