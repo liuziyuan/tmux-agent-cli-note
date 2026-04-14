@@ -1,5 +1,7 @@
 # tmux-agent-cli-note
 
+[中文文档](README_zh.md)
+
 A vim-like brainstorm note tool that runs inside tmux. Write notes, then send them directly to AI CLI agents (Claude Code, OpenCode, Codex, etc.) in the same tmux window.
 
 ## Features

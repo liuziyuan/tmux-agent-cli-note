@@ -1,5 +1,7 @@
 # tmux-agent-cli-note
 
+[English](README.md)
+
 一个运行在 tmux 中的 vim 风格头脑风暴笔记工具。编写笔记后，可直接发送到同一 tmux 窗口中的 AI CLI（Claude Code、OpenCode、Codex 等）。
 
 ## 特性
