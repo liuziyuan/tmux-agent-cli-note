@@ -5,7 +5,8 @@ import { Store } from './store';
 import { Editor } from './editor';
 import { ListView } from './list-view';
 import Tmux from './tux';
-import { AppState, AgentPane } from './types';
+import { AppState, AgentPane, Config } from './types';
+import { loadConfig } from './config';
 
 export class App {
   private readonly dir: string;
@@ -20,11 +21,13 @@ export class App {
   private _selectAgents: AgentPane[] = [];
   private _selectEditor: Editor | null = null;
   private _selectContent: string = '';
+  private _config: Config;
 
   constructor(dir: string) {
     this.dir = dir;
     this.screen = new Screen();
     this.store = new Store(dir);
+    this._config = loadConfig();
   }
 
   run(): void {
@@ -193,7 +196,7 @@ export class App {
 
   private _openEditor(noteId: string): void {
     this.state = AppState.EDITOR;
-    const editor = new Editor(this.screen, this.store, noteId);
+    const editor = new Editor(this.screen, this.store, noteId, this._config.cursor.insertStyle);
     editor.on('quit', () => {
       if (this.store.hasNotes()) {
         this._showList();

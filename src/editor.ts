@@ -2,7 +2,7 @@
 
 import { EventEmitter } from 'events';
 import { basename } from 'path';
-import { Cursor, EditorEvents } from './types';
+import { Cursor, EditorEvents, CursorStyle } from './types';
 import { ANSI } from './screen';
 import type { Screen } from './screen';
 import type { Store } from './store';
@@ -104,11 +104,12 @@ export class Editor extends EventEmitter {
   scrollOffset: number;
   commandBuf: string;
   pendingDelete: boolean;
+  private _insertCursorStyle: CursorStyle;
 
   // Re-export for type checking
   static ANSI = ANSI;
 
-  constructor(screen: Screen, store: Store, noteId?: string) {
+  constructor(screen: Screen, store: Store, noteId?: string, insertCursorStyle: CursorStyle = 'after') {
     super();
     this.screen = screen;
     this.store = store;
@@ -119,6 +120,7 @@ export class Editor extends EventEmitter {
     this.scrollOffset = 0;
     this.commandBuf = '';
     this.pendingDelete = false; // for dd
+    this._insertCursorStyle = insertCursorStyle;
 
     if (noteId) {
       const note = store.getNote(noteId);
@@ -361,7 +363,20 @@ export class Editor extends EventEmitter {
 
   private _setMode(mode: EditorMode): void {
     this.mode = mode;
+    this._applyCursorShape(mode);
     this.render();
+  }
+
+  private _applyCursorShape(mode: EditorMode): void {
+    if (mode === EditorMode.NORMAL) {
+      this.screen.setBlockCursor();
+    } else if (mode === EditorMode.INSERT) {
+      if (this._insertCursorStyle === 'on') {
+        this.screen.setBlockCursor();
+      } else {
+        this.screen.setBarCursor();
+      }
+    }
   }
 
   private _save(): void {
@@ -529,8 +544,9 @@ export class Editor extends EventEmitter {
     if (mode === EditorMode.INSERT || mode === EditorMode.NORMAL) {
       const screenRow = startRow + (this.cursor.row - this.scrollOffset);
       const line = this.lines[this.cursor.row] || '';
-      const screenCol = 4 + indexToCol(line, this.cursor.col);
+      const screenCol = 5 + indexToCol(line, this.cursor.col);
       if (screenRow >= startRow && screenRow < startRow + visible) {
+        this._applyCursorShape(mode);
         this.screen.moveCursor(screenRow, screenCol);
       }
     } else {

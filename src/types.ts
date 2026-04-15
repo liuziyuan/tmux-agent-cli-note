@@ -22,6 +22,9 @@ export interface AnsiCodes {
   bold: string;
   dim: string;
   reset: string;
+  setBlockCursor: string;
+  setBarCursor: string;
+  resetCursorStyle: string;
   fg: AnsiFg;
   bg: AnsiBg;
   cursorTo: (row: number, col: number) => string;
@@ -73,6 +76,14 @@ export const enum EditorMode {
 export interface Cursor {
   row: number;
   col: number;
+}
+
+export type CursorStyle = 'on' | 'after';
+
+export interface Config {
+  cursor: {
+    insertStyle: CursorStyle;
+  };
 }
 
 export interface EditorEvents {
