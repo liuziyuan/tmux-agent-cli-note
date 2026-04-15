@@ -43,7 +43,9 @@ export class Screen {
   }
 
   init(): void {
-    process.stdin.setRawMode(true);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
     process.stdin.resume();
     process.stdin.setEncoding('utf-8');
     process.stdout.write(ANSI.hideCursor);
