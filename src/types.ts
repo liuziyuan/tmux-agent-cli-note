@@ -87,3 +87,11 @@ export interface ListViewEvents {
   quit: [];
   empty: [];
 }
+
+export const enum AppState {
+  LIST    = 'LIST',
+  EDITOR  = 'EDITOR',
+  CONFIRM = 'CONFIRM',
+  WAIT_KEY = 'WAIT_KEY',
+  SELECT  = 'SELECT',
+}
