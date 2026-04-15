@@ -80,3 +80,10 @@ export interface EditorEvents {
   send: [];
   list: [];
 }
+
+export interface ListViewEvents {
+  select: [id: string];
+  new: [];
+  quit: [];
+  empty: [];
+}
