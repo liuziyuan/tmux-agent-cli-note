@@ -2,3 +2,4 @@ node_modules/
 .note/
 *.tgz
 dist/
+.DS_Store
