@@ -47,3 +47,19 @@ export interface NotesFile {
   directory: string;
   notes: Note[];
 }
+
+export type AgentType = 'claude' | 'opencode' | 'codex' | 'unknown';
+
+export interface AgentInfo {
+  type: AgentType;
+  label: string;
+}
+
+export interface AgentPane extends AgentInfo {
+  id: string;  // tmux pane ID，如 %1
+}
+
+export interface TmuxPane {
+  id: string;
+  active: boolean;
+}
