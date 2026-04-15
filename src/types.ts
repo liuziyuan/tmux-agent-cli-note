@@ -26,3 +26,24 @@ export interface AnsiCodes {
   bg: AnsiBg;
   cursorTo: (row: number, col: number) => string;
 }
+
+export interface Note {
+  id: string;
+  content: string;
+  createdAt: string;   // ISO 8601
+  updatedAt: string;
+  sentAt: string | null;
+}
+
+export interface NotePreview {
+  id: string;
+  preview: string;
+  createdAt: string;
+  updatedAt: string;
+  sentAt: string | null;
+}
+
+export interface NotesFile {
+  directory: string;
+  notes: Note[];
+}
