@@ -24,6 +24,16 @@
 npm install -g tmux-agent-cli-note
 ```
 
+## 命令
+
+### `note update` — 自动更新
+
+```bash
+note update
+```
+
+检查最新版本并自动更新。
+
 ## 使用方法
 
 在 tmux pane 中运行：
@@ -112,6 +122,33 @@ your-project/
   ]
 }
 ```
+
+## 本地开发
+
+```bash
+# 安装依赖
+npm install
+
+# 使用 tsx 直接运行（无需编译）
+npm run dev
+
+# 带参数运行
+npm run dev:args -- update
+
+# 编译后运行
+npm run dev:build
+
+# 仅类型检查
+npm run typecheck
+```
+
+| 脚本 | 说明 |
+|------|------|
+| `npm run dev` | 用 tsx 直接运行入口（跳过编译） |
+| `npm run dev:args` | 同上，方便传参 |
+| `npm run dev:build` | 先 tsc 编译，再运行产物 |
+| `npm run build` | 编译 TypeScript 到 dist/ |
+| `npm run typecheck` | 仅类型检查，不生成文件 |
 
 ## 许可证
 

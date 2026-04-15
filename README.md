@@ -24,6 +24,16 @@ A vim-like brainstorm note tool that runs inside tmux. Write notes, then send th
 npm install -g tmux-agent-cli-note
 ```
 
+## Commands
+
+### `note update` — Self-update
+
+```bash
+note update
+```
+
+Check for the latest version and update automatically.
+
 ## Usage
 
 Run `note` inside a tmux pane:
@@ -112,6 +122,33 @@ Example:
   ]
 }
 ```
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run directly with tsx (no build needed)
+npm run dev
+
+# Run with arguments
+npm run dev:args -- update
+
+# Build then run compiled output
+npm run dev:build
+
+# Type check only
+npm run typecheck
+```
+
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Run entry point via tsx (skip build) |
+| `npm run dev:args` | Same as dev, convenient for passing args |
+| `npm run dev:build` | Build with tsc, then run compiled JS |
+| `npm run build` | Compile TypeScript to dist/ |
+| `npm run typecheck` | Type check without emitting files |
 
 ## License
 
