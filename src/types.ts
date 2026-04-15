@@ -63,3 +63,20 @@ export interface TmuxPane {
   id: string;
   active: boolean;
 }
+
+export const enum EditorMode {
+  NORMAL = 'NORMAL',
+  INSERT = 'INSERT',
+  COMMAND = 'COMMAND',
+}
+
+export interface Cursor {
+  row: number;
+  col: number;
+}
+
+export interface EditorEvents {
+  quit: [];
+  send: [];
+  list: [];
+}
