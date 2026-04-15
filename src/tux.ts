@@ -68,6 +68,12 @@ class Tmux {
       if (cmd.includes('codex')) {
         return { type: 'codex', label: 'Codex' };
       }
+      if (cmd.includes('gemini')) {
+        return { type: 'gemini', label: 'Gemini CLI' };
+      }
+      if (cmd.includes('copilot')) {
+        return { type: 'copilot', label: 'GitHub Copilot' };
+      }
     } catch {
       /* ignore */
     }
@@ -82,6 +88,12 @@ class Tmux {
     }
     if (content.includes('codex')) {
       return { type: 'codex', label: 'Codex' };
+    }
+    if (content.includes('gemini')) {
+      return { type: 'gemini', label: 'Gemini CLI' };
+    }
+    if (content.includes('copilot')) {
+      return { type: 'copilot', label: 'GitHub Copilot' };
     }
 
     // Last resort: any pane with a rich prompt indicator (likely an AI tool)

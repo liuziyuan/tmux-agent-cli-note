@@ -51,7 +51,7 @@ export interface NotesFile {
   notes: Note[];
 }
 
-export type AgentType = 'claude' | 'opencode' | 'codex' | 'unknown';
+export type AgentType = 'claude' | 'opencode' | 'codex' | 'gemini' | 'copilot' | 'unknown';
 
 export interface AgentInfo {
   type: AgentType;
