@@ -59,12 +59,14 @@ export interface AgentInfo {
 }
 
 export interface AgentPane extends AgentInfo {
-  id: string;  // tmux pane ID，如 %1
+  id: string;    // tmux pane ID，如 %1
+  index: number; // tmux pane index，用于显示
 }
 
 export interface TmuxPane {
   id: string;
   active: boolean;
+  index: number;
 }
 
 export const enum EditorMode {

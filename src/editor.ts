@@ -25,7 +25,7 @@ type EditorMode = (typeof EditorMode)[keyof typeof EditorMode];
  * - Katakana, Hiragana
  * - Hangul
  */
-function displayWidth(str: string): number {
+export function displayWidth(str: string): number {
   let w = 0;
   for (const ch of str) {
     const code = ch.codePointAt(0);
@@ -477,6 +477,58 @@ export class Editor extends EventEmitter {
     if (this.cursor.col > lineLen) this.cursor.col = lineLen;
   }
 
+  /**
+   * Wrap a line to fit within maxWidth, handling CJK character widths
+   * Returns array of display lines
+   */
+  private _wrapLine(text: string, maxWidth: number): string[] {
+    if (maxWidth <= 0) return [text];
+    const lines: string[] = [];
+    let current = '';
+    let width = 0;
+
+    for (const ch of text) {
+      const cw = displayWidth(ch);
+      if (width + cw > maxWidth) {
+        if (current) lines.push(current);
+        current = ch;
+        width = cw;
+      } else {
+        current += ch;
+        width += cw;
+      }
+    }
+    if (current) lines.push(current);
+    return lines.length > 0 ? lines : [''];
+  }
+
+  /**
+   * Get cursor display position after wrapping
+   * Returns { lineOffset (which wrapped line), col (display column) }
+   */
+  private _getCursorDisplayPos(lineIdx: number, col: number): { lineOffset: number; col: number } {
+    const line = this.lines[lineIdx] || '';
+    const maxWidth = this.screen.contentWidth();
+
+    let currentWidth = 0;
+    let lineOffset = 0;
+    let displayCol = 0;
+
+    for (let i = 0; i < Math.min(col, line.length); i++) {
+      const cw = displayWidth(line[i]);
+      if (currentWidth + cw > maxWidth) {
+        lineOffset++;
+        currentWidth = cw;
+        displayCol = cw;
+      } else {
+        currentWidth += cw;
+        displayCol += cw;
+      }
+    }
+
+    return { lineOffset, col: displayCol };
+  }
+
   private _adjustScroll(): void {
     const visible = this.visibleLines;
     // Cursor should be within visible area
@@ -492,33 +544,42 @@ export class Editor extends EventEmitter {
   render(): void {
     const startRow = this.contentStartRow;
     const visible = this.visibleLines;
+    const maxWidth = this.screen.contentWidth();
 
     // Title bar
     const dirName = basename(this.store.dir);
     this.screen.drawTitleBar(dirName, this.store.listNotes().length);
 
-    // Content area
+    // Content area - with text wrapping
     this.screen.hideCursor();
-    for (let i = 0; i < visible; i++) {
-      const lineIdx = this.scrollOffset + i;
-      const row = startRow + i;
-      if (lineIdx < this.lines.length) {
-        const lineNum = String(lineIdx + 1).padStart(3);
-        const maxCols = this.screen.cols - 5;
-        // Truncate by display width, not string length
-        let content = '';
-        let w = 0;
-        for (const ch of this.lines[lineIdx]) {
-          const cw = displayWidth(ch);
-          if (w + cw > maxCols) break;
-          content += ch;
-          w += cw;
+
+    // Render lines with wrapping support
+    let displayRow = 0;
+    for (let lineIdx = this.scrollOffset; lineIdx < this.lines.length && displayRow < visible; lineIdx++) {
+      const line = this.lines[lineIdx];
+      const wrapLines = this._wrapLine(line, maxWidth);
+      const lineNum = String(lineIdx + 1).padStart(3);
+
+      for (let wrapIdx = 0; wrapIdx < wrapLines.length && displayRow < visible; wrapIdx++) {
+        const screenRow = startRow + displayRow;
+
+        // Show line number only for first wrapped line of each logical line
+        let prefix;
+        if (wrapIdx === 0) {
+          prefix = ANSI.dim + lineNum + ' ' + ANSI.reset;
+        } else {
+          prefix = ANSI.dim + '    ' + ANSI.reset;
         }
-        const prefix = ANSI.dim + lineNum + ' ' + ANSI.reset;
-        this.screen.writeAt(row, 1, prefix + content);
-      } else {
-        this.screen.clearRow(row);
+
+        this.screen.writeAt(screenRow, 1, prefix + wrapLines[wrapIdx]);
+        displayRow++;
       }
+    }
+
+    // Clear remaining rows
+    for (; displayRow < visible; displayRow++) {
+      const screenRow = startRow + displayRow;
+      this.screen.clearRow(screenRow);
     }
 
     // Status bar
@@ -540,11 +601,22 @@ export class Editor extends EventEmitter {
       this.screen.drawCommandLine('');
     }
 
-    // Cursor position
+    // Cursor position with wrap support
     if (mode === EditorMode.INSERT || mode === EditorMode.NORMAL) {
-      const screenRow = startRow + (this.cursor.row - this.scrollOffset);
-      const line = this.lines[this.cursor.row] || '';
-      const screenCol = 5 + indexToCol(line, this.cursor.col);
+      // Calculate display row, accounting for wrapped lines
+      let displayRow = 0;
+      for (let i = this.scrollOffset; i < this.cursor.row && i < this.lines.length; i++) {
+        const wrapLines = this._wrapLine(this.lines[i], maxWidth);
+        displayRow += wrapLines.length;
+      }
+
+      // Add wrap offset for cursor line
+      const cursorPos = this._getCursorDisplayPos(this.cursor.row, this.cursor.col);
+      displayRow += cursorPos.lineOffset;
+
+      const screenRow = startRow + displayRow;
+      const screenCol = 5 + cursorPos.col;
+
       if (screenRow >= startRow && screenRow < startRow + visible) {
         this._applyCursorShape(mode);
         this.screen.moveCursor(screenRow, screenCol);

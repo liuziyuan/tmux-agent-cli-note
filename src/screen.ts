@@ -72,6 +72,11 @@ export class Screen {
     return Math.max(1, this.rows - 3);
   }
 
+  // contentAreaWidth: cols - lineNum(3) - space(1) - margin(1)
+  contentWidth(): number {
+    return Math.max(10, this.cols - 5);
+  }
+
   writeAt(row: number, col: number, text: string): void {
     process.stdout.write(ANSI.cursorTo(row, col) + ANSI.clearLineRight + text);
   }
