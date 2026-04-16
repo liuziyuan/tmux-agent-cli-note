@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 import { basename } from 'path';
 import { ListViewEvents, NotePreview } from './types';
 import { ANSI } from './screen';
+import { displayWidth } from './editor';
 import type { Screen } from './screen';
 import type { Store } from './store';
 
@@ -153,20 +154,29 @@ export class ListView extends EventEmitter {
           const selected = noteIdx === this.selectedIndex;
           const sent = note.sentAt ? `${ANSI.fg.green}✓${ANSI.reset} ` : '  ';
           const idx = String(noteIdx + 1).padStart(2);
-          const preview = note.preview || '(empty)';
           const time = new Date(note.updatedAt).toLocaleString('zh-CN', {
             month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
           });
+          // sent(2) + idx(2) + space(1) = 5 visible columns before preview
+          const timeWidth = displayWidth(time);
+          const maxPreviewWidth = this.screen.cols - 5 - timeWidth - 1;
+          // Truncate preview by display width
+          const raw = note.preview || '(empty)';
+          let preview = '';
+          let pw = 0;
+          for (const ch of raw) {
+            const cw = displayWidth(ch);
+            if (pw + cw > Math.min(60, maxPreviewWidth)) break;
+            preview += ch;
+            pw += cw;
+          }
 
           let line;
+          const padLen = Math.max(1, this.screen.cols - 5 - pw - timeWidth);
           if (selected) {
-            line = `${ANSI.bg.reverse}${sent}${idx} ${preview}${ANSI.bg.unreverse}`;
-            // Pad to fill width
-            const padLen = this.screen.cols - preview.length - 20;
-            if (padLen > 0) line += ' '.repeat(padLen);
-            line += time + ANSI.reset;
+            line = `${ANSI.bg.reverse}${sent}${idx} ${preview}${' '.repeat(padLen)}${time}${ANSI.reset}`;
           } else {
-            line = `${sent}${ANSI.dim}${idx}${ANSI.reset} ${preview}  ${ANSI.dim}${time}${ANSI.reset}`;
+            line = `${sent}${ANSI.dim}${idx}${ANSI.reset} ${preview}${' '.repeat(padLen)}${ANSI.dim}${time}${ANSI.reset}`;
           }
           this.screen.writeAt(row, 1, line);
         } else {

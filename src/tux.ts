@@ -13,12 +13,12 @@ class Tmux {
   static listPanesInWindow(): TmuxPane[] {
     try {
       const output = execSync(
-        'tmux list-panes -F "#{pane_id} #{pane_active}"',
+        'tmux list-panes -F "#{pane_id} #{pane_active} #{pane_index}"',
         { encoding: 'utf-8' }
       );
       return output.trim().split('\n').map(line => {
-        const [id, active] = line.split(' ');
-        return { id, active: active === '1' };
+        const [id, active, index] = line.split(' ');
+        return { id, active: active === '1', index: parseInt(index, 10) };
       });
     } catch {
       return [];
@@ -44,7 +44,7 @@ class Tmux {
     for (const pane of panes) {
       const agent = Tmux._detectAgent(pane.id);
       if (agent) {
-        result.push({ id: pane.id, ...agent });
+        result.push({ id: pane.id, index: pane.index, ...agent });
       }
     }
 
@@ -68,6 +68,18 @@ class Tmux {
       if (cmd.includes('codex')) {
         return { type: 'codex', label: 'Codex' };
       }
+      if (cmd.includes('gemini')) {
+        return { type: 'gemini', label: 'Gemini CLI' };
+      }
+      if (cmd.includes('copilot')) {
+        return { type: 'copilot', label: 'GitHub Copilot' };
+      }
+
+      // Shell detected — agent has exited, skip content fallback
+      const shells = ['zsh', 'bash', 'fish', 'sh', 'dash', 'ksh', 'csh', 'tcsh'];
+      if (shells.includes(cmd)) {
+        return null;
+      }
     } catch {
       /* ignore */
     }
@@ -82,6 +94,12 @@ class Tmux {
     }
     if (content.includes('codex')) {
       return { type: 'codex', label: 'Codex' };
+    }
+    if (content.includes('gemini')) {
+      return { type: 'gemini', label: 'Gemini CLI' };
+    }
+    if (content.includes('copilot')) {
+      return { type: 'copilot', label: 'GitHub Copilot' };
     }
 
     // Last resort: any pane with a rich prompt indicator (likely an AI tool)

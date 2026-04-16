@@ -5,7 +5,8 @@ import { Store } from './store';
 import { Editor } from './editor';
 import { ListView } from './list-view';
 import Tmux from './tux';
-import { AppState, AgentPane } from './types';
+import { AppState, AgentPane, Config } from './types';
+import { loadConfig } from './config';
 
 export class App {
   private readonly dir: string;
@@ -20,11 +21,14 @@ export class App {
   private _selectAgents: AgentPane[] = [];
   private _selectEditor: Editor | null = null;
   private _selectContent: string = '';
+  private _selectIdx: number = 0;
+  private _config: Config;
 
   constructor(dir: string) {
     this.dir = dir;
     this.screen = new Screen();
     this.store = new Store(dir);
+    this._config = loadConfig();
   }
 
   run(): void {
@@ -39,6 +43,13 @@ export class App {
     };
     process.on('SIGINT', cleanup);
     process.on('SIGTERM', cleanup);
+
+    // Re-render on terminal resize
+    process.stdout.on('resize', () => {
+      if (this.currentView) {
+        this.currentView.render();
+      }
+    });
 
     if (!this.store.hasNotes()) {
       // No notes — go directly to editor with a new note
@@ -87,6 +98,12 @@ export class App {
                 i += 3;
                 continue;
               }
+            }
+            // Unknown CSI sequence — scan for final byte (0x40–0x7E) and skip it
+            const consumed = this._skipCsi(buf, i);
+            if (consumed > 0) {
+              i += consumed;
+              continue;
             }
             // Incomplete escape sequence, wait for more
             pending = true;
@@ -142,6 +159,25 @@ export class App {
     return keys;
   }
 
+  /** Try to consume a complete unknown CSI sequence starting at buf[i]='\x1b'.
+   *  Returns number of bytes consumed, or 0 if incomplete. */
+  private _skipCsi(buf: string, i: number): number {
+    // buf[i]='\x1b', buf[i+1]='[', scan from i+2 for final byte 0x40-0x7E
+    let j = i + 2;
+    while (j < buf.length) {
+      const c = buf.charCodeAt(j);
+      if (c >= 0x40 && c <= 0x7e) {
+        return j - i + 1; // complete sequence — consume it
+      }
+      if (c < 0x20 || c > 0x3f) {
+        // Not a parameter/intermediate byte — malformed, skip just \x1b[
+        return 0;
+      }
+      j++;
+    }
+    return 0; // incomplete — caller should set pending
+  }
+
   private _dispatchKey(key: string): void {
     if (this.state === AppState.CONFIRM) {
       this._handleConfirm(key);
@@ -193,7 +229,7 @@ export class App {
 
   private _openEditor(noteId: string): void {
     this.state = AppState.EDITOR;
-    const editor = new Editor(this.screen, this.store, noteId);
+    const editor = new Editor(this.screen, this.store, noteId, this._config.cursor.insertStyle);
     editor.on('quit', () => {
       if (this.store.hasNotes()) {
         this._showList();
@@ -254,17 +290,20 @@ export class App {
     // Agent list
     for (let i = 0; i < agents.length; i++) {
       const row = titleRow + 1 + i;
-      this.screen.writeAt(row, 3,
-        `${ANSI.bold}${ANSI.fg.cyan}${i + 1}${ANSI.reset}) ${agents[i].label} ${ANSI.dim}(${agents[i].id})${ANSI.reset}`
+      const cursor = i === this._selectIdx ? `${ANSI.fg.cyan}>${ANSI.reset}` : ' ';
+      const highlight = i === this._selectIdx ? ANSI.bold : '';
+      const dimRestore = i === this._selectIdx ? ANSI.reset : ANSI.reset;
+      this.screen.writeAt(row, 1,
+        `${cursor} ${ANSI.bold}${ANSI.fg.cyan}${agents[i].index}${ANSI.reset}) ${highlight}${agents[i].label}${dimRestore} ${ANSI.dim}(${agents[i].id})${ANSI.reset}`
       );
     }
-    this.screen.drawStatusBar('SELECT', '1-9:select  Esc:cancel');
+    this.screen.drawStatusBar('SELECT', 'j/k:move  Enter:select  Esc:cancel');
     this.screen.drawCommandLine('');
     this.screen.hideCursor();
   }
 
   private _handleSelectKey(key: string): void {
-    if (key === '\x1b' || key.startsWith('\x1b[')) {
+    if (key === '\x1b') {
       // Cancel — return to NORMAL mode
       this.state = AppState.EDITOR;
       if (this._selectEditor) {
@@ -274,12 +313,36 @@ export class App {
       }
       return;
     }
-    const idx = parseInt(key, 10) - 1;
-    if (idx >= 0 && idx < this._selectAgents.length) {
-      const agent = this._selectAgents[idx];
+    // j / down — move down
+    if (key === 'j' || key === '\x1b[B') {
+      this._selectIdx = (this._selectIdx + 1) % this._selectAgents.length;
+      this._renderSelector();
+      return;
+    }
+    // k / up — move up
+    if (key === 'k' || key === '\x1b[A') {
+      this._selectIdx = (this._selectIdx - 1 + this._selectAgents.length) % this._selectAgents.length;
+      this._renderSelector();
+      return;
+    }
+    // Enter — confirm selection
+    if (key === '\r') {
+      const agent = this._selectAgents[this._selectIdx];
       this.state = AppState.EDITOR;
       if (this._selectEditor) {
         this._doSend(this._selectEditor, agent.id, agent.label);
+      }
+      return;
+    }
+    // Numeric — select by pane index
+    const num = parseInt(key, 10);
+    if (!isNaN(num)) {
+      const agent = this._selectAgents.find(a => a.index === num);
+      if (agent) {
+        this.state = AppState.EDITOR;
+        if (this._selectEditor) {
+          this._doSend(this._selectEditor, agent.id, agent.label);
+        }
       }
     }
   }

@@ -5,6 +5,9 @@ const ANSI: AnsiCodes = {
   home: '\x1b[H',
   hideCursor: '\x1b[?25l',
   showCursor: '\x1b[?25h',
+  setBlockCursor: '\x1b[2 q',
+  setBarCursor: '\x1b[6 q',
+  resetCursorStyle: '\x1b[0 q',
   clearLine: '\x1b[2K',
   clearLineRight: '\x1b[K',
   bold: '\x1b[1m',
@@ -53,6 +56,7 @@ export class Screen {
   }
 
   destroy(): void {
+    process.stdout.write(ANSI.resetCursorStyle);
     process.stdout.write(ANSI.showCursor);
     process.stdout.write(ANSI.reset);
     this.clear();
@@ -66,6 +70,11 @@ export class Screen {
   // contentAreaHeight: rows - title(1) - status(1) - cmdline(1)
   contentHeight(): number {
     return Math.max(1, this.rows - 3);
+  }
+
+  // contentAreaWidth: cols - lineNum(3) - space(1) - margin(1)
+  contentWidth(): number {
+    return Math.max(10, this.cols - 5);
   }
 
   writeAt(row: number, col: number, text: string): void {
@@ -128,6 +137,14 @@ export class Screen {
 
   hideCursor(): void {
     process.stdout.write(ANSI.hideCursor);
+  }
+
+  setBlockCursor(): void {
+    process.stdout.write(ANSI.setBlockCursor);
+  }
+
+  setBarCursor(): void {
+    process.stdout.write(ANSI.setBarCursor);
   }
 }
 

@@ -22,6 +22,9 @@ export interface AnsiCodes {
   bold: string;
   dim: string;
   reset: string;
+  setBlockCursor: string;
+  setBarCursor: string;
+  resetCursorStyle: string;
   fg: AnsiFg;
   bg: AnsiBg;
   cursorTo: (row: number, col: number) => string;
@@ -48,7 +51,7 @@ export interface NotesFile {
   notes: Note[];
 }
 
-export type AgentType = 'claude' | 'opencode' | 'codex' | 'unknown';
+export type AgentType = 'claude' | 'opencode' | 'codex' | 'gemini' | 'copilot' | 'unknown';
 
 export interface AgentInfo {
   type: AgentType;
@@ -56,12 +59,14 @@ export interface AgentInfo {
 }
 
 export interface AgentPane extends AgentInfo {
-  id: string;  // tmux pane ID，如 %1
+  id: string;    // tmux pane ID，如 %1
+  index: number; // tmux pane index，用于显示
 }
 
 export interface TmuxPane {
   id: string;
   active: boolean;
+  index: number;
 }
 
 export const enum EditorMode {
@@ -73,6 +78,14 @@ export const enum EditorMode {
 export interface Cursor {
   row: number;
   col: number;
+}
+
+export type CursorStyle = 'on' | 'after';
+
+export interface Config {
+  cursor: {
+    insertStyle: CursorStyle;
+  };
 }
 
 export interface EditorEvents {
