@@ -184,6 +184,22 @@ export class Editor extends EventEmitter {
     this.pendingDelete = false;
 
     switch (key) {
+      case '0':
+      case '\x1b[H':
+      case '\x1bOH':
+        this.cursor.col = 0;
+        this.render();
+        break;
+      case '$':
+      case '\x1b[F':
+      case '\x1bOF':
+        this.cursor.col = (this.lines[this.cursor.row] || '').length;
+        this.render();
+        break;
+      case 'D':
+        this.lines[this.cursor.row] = (this.lines[this.cursor.row] || '').slice(0, this.cursor.col);
+        this.render();
+        break;
       case 'i':
         this._setMode(EditorMode.INSERT);
         break;
@@ -192,10 +208,12 @@ export class Editor extends EventEmitter {
         this.commandBuf = '';
         break;
       case 'h':
+      case '\x1b[D':
         this.cursor.col = Math.max(0, this.cursor.col - 1);
         this.render();
         break;
       case 'l':
+      case '\x1b[C':
         this.cursor.col = Math.min(
           (this.lines[this.cursor.row] || '').length,
           this.cursor.col + 1
@@ -203,20 +221,14 @@ export class Editor extends EventEmitter {
         this.render();
         break;
       case 'j':
-        if (this.cursor.row < this.lines.length - 1) {
-          this.cursor.row++;
-          this._clampCol();
-          this._adjustScroll();
-          this.render();
-        }
+      case '\x1b[B':
+        this._moveDown();
+        this.render();
         break;
       case 'k':
-        if (this.cursor.row > 0) {
-          this.cursor.row--;
-          this._clampCol();
-          this._adjustScroll();
-          this.render();
-        }
+      case '\x1b[A':
+        this._moveUp();
+        this.render();
         break;
       case 'x':
         this._deleteCharUnderCursor();
@@ -288,7 +300,7 @@ export class Editor extends EventEmitter {
       return;
     }
 
-    // Handle escape sequences for arrow keys in insert mode
+    // Handle escape sequences for special keys in insert mode
     if (key === '\x1b[A') {
       this._moveUp();
       this.render();
@@ -312,6 +324,61 @@ export class Editor extends EventEmitter {
         this.cursor.col--;
         this.render();
       }
+      return;
+    }
+    // Delete key
+    if (key === '\x1b[3~') {
+      this._deleteCharUnderCursor();
+      this.render();
+      return;
+    }
+    // Home / End
+    if (key === '\x1b[H' || key === '\x1bOH') {
+      this.cursor.col = 0;
+      this.render();
+      return;
+    }
+    if (key === '\x1b[F' || key === '\x1bOF') {
+      this.cursor.col = (this.lines[this.cursor.row] || '').length;
+      this.render();
+      return;
+    }
+    // Ctrl+Home / Ctrl+End
+    if (key === '\x1b[1;5H') {
+      this.cursor.row = 0;
+      this.cursor.col = 0;
+      this.scrollOffset = 0;
+      this.render();
+      return;
+    }
+    if (key === '\x1b[1;5F') {
+      this.cursor.row = this.lines.length - 1;
+      this.cursor.col = (this.lines[this.cursor.row] || '').length;
+      this._adjustScroll();
+      this.render();
+      return;
+    }
+    // Ctrl+Left / Ctrl+Right (word navigation)
+    if (key === '\x1b[1;5D') {
+      const pos = this._wordBackward(this.cursor.row, this.cursor.col);
+      this.cursor.row = pos.row;
+      this.cursor.col = pos.col;
+      this._adjustScroll();
+      this.render();
+      return;
+    }
+    if (key === '\x1b[1;5C') {
+      const pos = this._wordForward(this.cursor.row, this.cursor.col);
+      this.cursor.row = pos.row;
+      this.cursor.col = pos.col;
+      this._adjustScroll();
+      this.render();
+      return;
+    }
+    // Ctrl+Delete
+    if (key === '\x1b[3;5~') {
+      this._deleteWordForward();
+      this.render();
       return;
     }
   }
@@ -387,6 +454,119 @@ export class Editor extends EventEmitter {
     }
   }
 
+  // --- Word navigation helpers ---
+
+  private _isWordChar(code: number): boolean {
+    return (code >= 0x41 && code <= 0x5a) || // A-Z
+           (code >= 0x61 && code <= 0x7a) || // a-z
+           (code >= 0x30 && code <= 0x39) || // 0-9
+           code === 0x5f;                    // _
+  }
+
+  private _isWideChar(code: number): boolean {
+    return isWide(code);
+  }
+
+  private _wordForward(row: number, col: number): { row: number; col: number } {
+    let r = row, c = col;
+    const line = this.lines[r] || '';
+    // If at end of line, move to start of next line
+    if (c >= line.length) {
+      if (r < this.lines.length - 1) return { row: r + 1, col: 0 };
+      return { row: r, col: c };
+    }
+    const firstCode = line.codePointAt(c)!;
+    if (this._isWideChar(firstCode)) {
+      // CJK char is its own word — skip it
+      c += String.fromCodePoint(firstCode).length;
+      // Skip whitespace after
+      while (r < this.lines.length) {
+        const ln = this.lines[r] || '';
+        while (c < ln.length && ln.charCodeAt(c) === 0x20) c++;
+        if (c < ln.length) return { row: r, col: c };
+        if (r < this.lines.length - 1) { r++; c = 0; } else break;
+      }
+      return { row: r, col: Math.min(c, (this.lines[r] || '').length) };
+    }
+    if (this._isWordChar(firstCode)) {
+      // Skip word chars
+      while (c < (this.lines[r] || '').length && this._isWordChar((this.lines[r] || '').codePointAt(c)!))
+        c++;
+    } else {
+      // Skip non-blank, non-word chars (punctuation)
+      while (c < (this.lines[r] || '').length) {
+        const ch = (this.lines[r] || '').charCodeAt(c);
+        if (ch === 0x20 || this._isWordChar(ch)) break;
+        c++;
+      }
+    }
+    // Skip whitespace
+    while (r < this.lines.length) {
+      const ln = this.lines[r] || '';
+      while (c < ln.length && ln.charCodeAt(c) === 0x20) c++;
+      if (c < ln.length) return { row: r, col: c };
+      if (r < this.lines.length - 1) { r++; c = 0; } else break;
+    }
+    return { row: r, col: Math.min(c, (this.lines[r] || '').length) };
+  }
+
+  private _wordBackward(row: number, col: number): { row: number; col: number } {
+    let r = row, c = col;
+    // Move back one position
+    if (c === 0) {
+      if (r === 0) return { row: 0, col: 0 };
+      r--;
+      c = (this.lines[r] || '').length;
+    } else {
+      c--;
+    }
+    // Skip whitespace backward
+    while (true) {
+      const ln = this.lines[r] || '';
+      while (c > 0 && ln.charCodeAt(c - 1) === 0x20) c--;
+      if (c > 0) break;
+      // At start of line — check if we should go to previous line
+      if (r === 0) return { row: 0, col: 0 };
+      r--;
+      c = (this.lines[r] || '').length;
+      if (c === 0) return { row: r, col: 0 };
+    }
+    // Now c > 0, find the start of the word
+    const ln = this.lines[r] || '';
+    const prevCode = ln.codePointAt(c - 1)!;
+    if (this._isWideChar(prevCode)) {
+      // CJK char — it's its own word
+      c -= String.fromCodePoint(prevCode).length;
+      return { row: r, col: c };
+    }
+    if (this._isWordChar(prevCode)) {
+      while (c > 0 && this._isWordChar(ln.codePointAt(c - 1)!)) c--;
+    } else {
+      // Non-word, non-space (punctuation)
+      while (c > 0) {
+        const ch = ln.charCodeAt(c - 1);
+        if (ch === 0x20 || this._isWordChar(ch)) break;
+        c--;
+      }
+    }
+    return { row: r, col: c };
+  }
+
+  private _deleteWordForward(): void {
+    const line = this.lines[this.cursor.row] || '';
+    if (this.cursor.col >= line.length) return;
+    const target = this._wordForward(this.cursor.row, this.cursor.col);
+    if (target.row === this.cursor.row) {
+      // Same line — delete from cursor to target col
+      this.lines[this.cursor.row] = line.slice(0, this.cursor.col) + line.slice(target.col);
+    } else {
+      // Cross-line — delete to end of current line + splice
+      this.lines[this.cursor.row] = line.slice(0, this.cursor.col) +
+        (this.lines[target.row] || '').slice(target.col);
+      this.lines.splice(this.cursor.row + 1, target.row - this.cursor.row);
+    }
+  }
+
   // --- Text operations ---
 
   private _insertChar(ch: string): void {
@@ -459,19 +639,54 @@ export class Editor extends EventEmitter {
   }
 
   private _moveUp(): void {
-    if (this.cursor.row > 0) {
+    const maxWidth = this.screen.contentWidth();
+    const line = this.lines[this.cursor.row] || '';
+    const wraps = this._wrapLine(line, maxWidth);
+    const cursorPos = this._getCursorDisplayPos(this.cursor.row, this.cursor.col);
+
+    if (cursorPos.lineOffset > 0) {
+      // Same logical line, previous visual segment
+      const targetOffset = cursorPos.lineOffset - 1;
+      let charStart = 0;
+      for (let w = 0; w < targetOffset; w++) charStart += wraps[w].length;
+      const targetCol = colToIndex(wraps[targetOffset], cursorPos.col);
+      this.cursor.col = charStart + Math.min(targetCol, wraps[targetOffset].length);
+    } else if (this.cursor.row > 0) {
+      // Previous logical line, last visual segment
       this.cursor.row--;
-      this._clampCol();
-      this._adjustScroll();
+      const prevLine = this.lines[this.cursor.row] || '';
+      const prevWraps = this._wrapLine(prevLine, maxWidth);
+      const targetOffset = prevWraps.length - 1;
+      let charStart = 0;
+      for (let w = 0; w < targetOffset; w++) charStart += prevWraps[w].length;
+      const targetCol = colToIndex(prevWraps[targetOffset], cursorPos.col);
+      this.cursor.col = charStart + Math.min(targetCol, prevWraps[targetOffset].length);
     }
+    this._adjustScroll();
   }
 
   private _moveDown(): void {
-    if (this.cursor.row < this.lines.length - 1) {
+    const maxWidth = this.screen.contentWidth();
+    const line = this.lines[this.cursor.row] || '';
+    const wraps = this._wrapLine(line, maxWidth);
+    const cursorPos = this._getCursorDisplayPos(this.cursor.row, this.cursor.col);
+
+    if (cursorPos.lineOffset < wraps.length - 1) {
+      // Same logical line, next visual segment
+      const targetOffset = cursorPos.lineOffset + 1;
+      let charStart = 0;
+      for (let w = 0; w < targetOffset; w++) charStart += wraps[w].length;
+      const targetCol = colToIndex(wraps[targetOffset], cursorPos.col);
+      this.cursor.col = charStart + Math.min(targetCol, wraps[targetOffset].length);
+    } else if (this.cursor.row < this.lines.length - 1) {
+      // Next logical line, first visual segment
       this.cursor.row++;
-      this._clampCol();
-      this._adjustScroll();
+      const nextLine = this.lines[this.cursor.row] || '';
+      const nextWraps = this._wrapLine(nextLine, maxWidth);
+      const targetCol = colToIndex(nextWraps[0], cursorPos.col);
+      this.cursor.col = Math.min(targetCol, nextWraps[0].length);
     }
+    this._adjustScroll();
   }
 
   private _clampCol(): void {
@@ -653,7 +868,7 @@ export class Editor extends EventEmitter {
     const mode = this.mode;
     let hint = '';
     if (mode === EditorMode.NORMAL) {
-      hint = 'i:insert  :s:send  q:quit  h/j/k/l:move  x:del  dd:del line';
+      hint = 'i:insert  q:quit  h/j/k/l:move  0/$:行首末  x:del  dd:del line  D:del to end';
     } else if (mode === EditorMode.INSERT) {
       hint = 'Esc:back to normal';
     } else if (mode === EditorMode.COMMAND) {

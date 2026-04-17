@@ -18,6 +18,7 @@ export class App {
   private _keyBuf: string = '';
   private _escTimer: ReturnType<typeof setTimeout> | null = null;
   private _waitCallback: (() => void) | null = null;
+  private _waitEnterOnly: boolean = false;
   private _selectAgents: AgentPane[] = [];
   private _selectEditor: Editor | null = null;
   private _selectContent: string = '';
@@ -122,24 +123,30 @@ export class App {
               pending = true;
               break;
             }
-            if (i + 2 < buf.length) {
-              // Known: \x1b[A (up) \x1b[B (down) \x1b[C (right) \x1b[D (left)
-              const seq = buf.slice(i, i + 3);
-              if (['\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D'].includes(seq)) {
-                keys.push(seq);
-                i += 3;
-                continue;
+            // General CSI sequence: \x1b[<params><final>
+            // Collect parameter bytes (digits, semicolons, intermediate bytes)
+            // until final byte (0x40-0x7E), then emit the full sequence as a key
+            {
+              let j = i + 2;
+              let found = false;
+              while (j < buf.length) {
+                const c = buf.charCodeAt(j);
+                if (c >= 0x40 && c <= 0x7e) {
+                  // Final byte found — complete CSI sequence
+                  keys.push(buf.slice(i, j + 1));
+                  i = j + 1;
+                  found = true;
+                  break;
+                }
+                j++;
               }
-            }
-            // Unknown CSI sequence — scan for final byte (0x40–0x7E) and skip it
-            const consumed = this._skipCsi(buf, i);
-            if (consumed > 0) {
-              i += consumed;
+              if (!found) {
+                // Incomplete — wait for more data
+                pending = true;
+                break;
+              }
               continue;
             }
-            // Incomplete escape sequence, wait for more
-            pending = true;
-            break;
           } else {
             // Alt+key or Esc followed by another key
             // Treat as bare Esc, next char will be processed separately
@@ -227,33 +234,19 @@ export class App {
     return { _mouse: true, row, col, button: 0 };
   }
 
-  /** Try to consume a complete unknown CSI sequence starting at buf[i]='\x1b'.
-   *  Returns number of bytes consumed, or 0 if incomplete. */
-  private _skipCsi(buf: string, i: number): number {
-    // buf[i]='\x1b', buf[i+1]='[', scan from i+2 for final byte 0x40-0x7E
-    let j = i + 2;
-    while (j < buf.length) {
-      const c = buf.charCodeAt(j);
-      if (c >= 0x40 && c <= 0x7e) {
-        return j - i + 1; // complete sequence — consume it
-      }
-      if (c < 0x20 || c > 0x3f) {
-        // Not a parameter/intermediate byte — malformed, skip just \x1b[
-        return 0;
-      }
-      j++;
-    }
-    return 0; // incomplete — caller should set pending
-  }
-
   private _dispatchKey(key: string): void {
     if (this.state === AppState.CONFIRM) {
       this._handleConfirm(key);
       return;
     }
     if (this.state === AppState.WAIT_KEY) {
-      // Ignore pure escape/control keys
-      if (key === '\x1b' || key.startsWith('\x1b[')) return;
+      if (this._waitEnterOnly) {
+        if (key !== '\r') return;
+        this._waitEnterOnly = false;
+      } else {
+        // Ignore pure escape/control keys
+        if (key === '\x1b' || key.startsWith('\x1b[')) return;
+      }
       this.state = AppState.EDITOR;
       if (this._waitCallback) {
         this._waitCallback();
@@ -428,8 +421,8 @@ export class App {
       if (editor.noteId) {
         this.store.markSent(editor.noteId);
       }
-      this.screen.drawSuccess(`Sent to ${label}. Press any key to continue.`);
-      this._waitForAnyKey(() => {
+      this.screen.drawSuccess(`Sent to ${label}. Press Enter to continue.`);
+      this._waitForEnter(() => {
         editor.mode = 'NORMAL';
         editor.commandBuf = '';
         editor.render();
@@ -447,6 +440,12 @@ export class App {
   private _waitForAnyKey(callback: () => void): void {
     this.state = AppState.WAIT_KEY;
     this._waitCallback = callback;
+  }
+
+  private _waitForEnter(callback: () => void): void {
+    this.state = AppState.WAIT_KEY;
+    this._waitCallback = callback;
+    this._waitEnterOnly = true;
   }
 
   private _handleConfirm(_key: string): void {
