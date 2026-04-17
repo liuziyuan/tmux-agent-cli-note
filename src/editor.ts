@@ -105,11 +105,12 @@ export class Editor extends EventEmitter {
   commandBuf: string;
   pendingDelete: boolean;
   private _insertCursorStyle: CursorStyle;
+  private _tmuxMouseOn: boolean;
 
   // Re-export for type checking
   static ANSI = ANSI;
 
-  constructor(screen: Screen, store: Store, noteId?: string, insertCursorStyle: CursorStyle = 'after') {
+  constructor(screen: Screen, store: Store, noteId?: string, insertCursorStyle: CursorStyle = 'after', tmuxMouseOn?: boolean) {
     super();
     this.screen = screen;
     this.store = store;
@@ -121,6 +122,7 @@ export class Editor extends EventEmitter {
     this.commandBuf = '';
     this.pendingDelete = false; // for dd
     this._insertCursorStyle = insertCursorStyle;
+    this._tmuxMouseOn = tmuxMouseOn ?? false;
 
     if (noteId) {
       const note = store.getNote(noteId);
@@ -539,6 +541,71 @@ export class Editor extends EventEmitter {
     }
   }
 
+  /**
+   * Handle mouse click: convert screen coordinates to logical cursor position
+   * screenRow/screenCol are 1-based terminal coordinates
+   */
+  handleMouseClick(screenRow: number, screenCol: number): void {
+    const pos = this._screenToLogicalPos(screenRow, screenCol);
+    if (!pos) return;
+    this.cursor.row = pos.row;
+    this.cursor.col = pos.col;
+    this._adjustScroll();
+    this.render();
+  }
+
+  /**
+   * Convert screen coordinates (1-based) to logical { row, col } (0-based indices)
+   * Returns null if click is outside content area
+   */
+  private _screenToLogicalPos(screenRow: number, screenCol: number): { row: number; col: number } | null {
+    const startRow = this.contentStartRow; // 2
+    const visible = this.visibleLines;
+    const maxWidth = this.screen.contentWidth();
+
+    // Convert to 0-based display row relative to content start
+    const displayRow = screenRow - startRow;
+    if (displayRow < 0 || displayRow >= visible) return null;
+
+    // Walk from scrollOffset, accumulating display rows per logical line
+    let remaining = displayRow;
+    let logicalRow = this.scrollOffset;
+
+    while (logicalRow < this.lines.length) {
+      const wrapLines = this._wrapLine(this.lines[logicalRow], maxWidth);
+      if (remaining < wrapLines.length) {
+        // Found the logical line — 'remaining' tells us which wrap segment
+        break;
+      }
+      remaining -= wrapLines.length;
+      logicalRow++;
+    }
+
+    // Clicked past all content — clamp to last line
+    if (logicalRow >= this.lines.length) {
+      logicalRow = this.lines.length - 1;
+      remaining = this._wrapLine(this.lines[logicalRow], maxWidth).length - 1;
+    }
+
+    const line = this.lines[logicalRow] || '';
+    const wrapLines = this._wrapLine(line, maxWidth);
+    const wrapIdx = Math.min(remaining, wrapLines.length - 1);
+
+    // Calculate character offset within this wrap segment
+    let charOffset = 0;
+    for (let w = 0; w < wrapIdx; w++) {
+      charOffset += wrapLines[w].length;
+    }
+
+    // Convert display column to character index within this wrap segment
+    const displayCol = Math.max(0, screenCol - 5); // 5 = line number prefix width
+    const segment = wrapLines[wrapIdx] || '';
+    const colInSegment = colToIndex(segment, displayCol);
+    const col = Math.min(charOffset + colInSegment, line.length);
+
+    return { row: logicalRow, col };
+  }
+
   // --- Rendering ---
 
   render(): void {
@@ -592,7 +659,7 @@ export class Editor extends EventEmitter {
     } else if (mode === EditorMode.COMMAND) {
       hint = 'Enter:exec  Esc:cancel  s:send  q:quit  ls:list';
     }
-    this.screen.drawStatusBar(mode, hint);
+    this.screen.drawStatusBar(mode, hint, this._tmuxMouseOn);
 
     // Command line
     if (mode === EditorMode.COMMAND) {

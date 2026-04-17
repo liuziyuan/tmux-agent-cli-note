@@ -23,12 +23,14 @@ export class App {
   private _selectContent: string = '';
   private _selectIdx: number = 0;
   private _config: Config;
+  private _tmuxMouseOn: boolean;
 
   constructor(dir: string) {
     this.dir = dir;
     this.screen = new Screen();
     this.store = new Store(dir);
     this._config = loadConfig();
+    this._tmuxMouseOn = Tmux.isMouseEnabled();
   }
 
   run(): void {
@@ -73,15 +75,19 @@ export class App {
     if (keys !== null) {
       this._keyBuf = '';
       for (const key of keys) {
-        this._dispatchKey(key);
+        if (typeof key === 'object' && key._mouse) {
+          this._dispatchMouse(key);
+        } else {
+          this._dispatchKey(key as string);
+        }
       }
     }
   }
 
-  private _parseKeys(buf: string): string[] | null {
+  private _parseKeys(buf: string): (string | { _mouse: true; row: number; col: number; button: number })[] | null {
     if (buf.length === 0) return null;
 
-    const keys: string[] = [];
+    const keys: (string | { _mouse: true; row: number; col: number; button: number })[] = [];
     let i = 0;
     let pending = false;
 
@@ -90,6 +96,32 @@ export class App {
         // Escape sequence
         if (i + 1 < buf.length) {
           if (buf[i + 1] === '[') {
+            // X10 mouse: \x1b[M<btn><col><row> (3 bytes after M)
+            if (i + 2 < buf.length && buf[i + 2] === 'M') {
+              if (i + 5 < buf.length) {
+                const mouse = this._parseX10Mouse(buf.charCodeAt(i + 3), buf.charCodeAt(i + 4), buf.charCodeAt(i + 5));
+                if (mouse) keys.push(mouse);
+                i += 6;
+                continue;
+              }
+              // Incomplete X10 sequence
+              pending = true;
+              break;
+            }
+            // SGR mouse: \x1b[<btn;col;rowM or \x1b[<btn;col;rowm
+            if (i + 2 < buf.length && buf[i + 2] === '<') {
+              const end = this._findSgrEnd(buf, i + 3);
+              if (end >= 0) {
+                const seq = buf.slice(i, end + 1);
+                const mouse = this._parseSgrMouse(seq);
+                if (mouse) keys.push(mouse);
+                i = end + 1;
+                continue;
+              }
+              // Incomplete SGR sequence
+              pending = true;
+              break;
+            }
             if (i + 2 < buf.length) {
               // Known: \x1b[A (up) \x1b[B (down) \x1b[C (right) \x1b[D (left)
               const seq = buf.slice(i, i + 3);
@@ -159,6 +191,42 @@ export class App {
     return keys;
   }
 
+  /** Parse X10 mouse: button/col/row bytes (each offset by 32) */
+  private _parseX10Mouse(bBtn: number, bCol: number, bRow: number): { _mouse: true; row: number; col: number; button: number } | null {
+    const button = bBtn & 3; // 0=left, 1=middle, 2=right
+    if (button !== 0) return null; // only handle left click
+    const col = bCol - 32; // 1-based
+    const row = bRow - 32; // 1-based
+    return { _mouse: true, row, col, button };
+  }
+
+  /** Find end of SGR mouse sequence starting after \x1b[< — returns index of M/m terminator */
+  private _findSgrEnd(buf: string, start: number): number {
+    for (let j = start; j < buf.length; j++) {
+      const c = buf[j];
+      if (c === 'M' || c === 'm') return j;
+      // SGR params: digits and semicolons only
+      if (!((c >= '0' && c <= '9') || c === ';')) return -1;
+    }
+    return -1; // incomplete
+  }
+
+  /** Parse SGR mouse: \x1b[<btn;col;rowM */
+  private _parseSgrMouse(seq: string): { _mouse: true; row: number; col: number; button: number } | null {
+    // seq = "\x1b[<btn;col;rowM"
+    const match = seq.match(/^\x1b\[<(\d+);(\d+);(\d+)(M|m)$/);
+    if (!match) return null;
+    const button = parseInt(match[1], 10);
+    const isRelease = match[4] === 'm';
+    if (isRelease) return null; // only handle press
+    // button 0=left, 1=middle, 2=right, 32=drag, 34=move...
+    const btnType = button & 3; // mask motion/wheel bits
+    if (btnType !== 0) return null; // only handle left click
+    const col = parseInt(match[2], 10); // 1-based
+    const row = parseInt(match[3], 10); // 1-based
+    return { _mouse: true, row, col, button: 0 };
+  }
+
   /** Try to consume a complete unknown CSI sequence starting at buf[i]='\x1b'.
    *  Returns number of bytes consumed, or 0 if incomplete. */
   private _skipCsi(buf: string, i: number): number {
@@ -211,6 +279,12 @@ export class App {
     }
   }
 
+  private _dispatchMouse(event: { row: number; col: number; button: number }): void {
+    if (this.state === AppState.EDITOR && this.currentView instanceof Editor) {
+      this.currentView.handleMouseClick(event.row, event.col);
+    }
+  }
+
   private _showList(): void {
     this.state = AppState.LIST;
     const lv = new ListView(this.screen, this.store);
@@ -229,7 +303,7 @@ export class App {
 
   private _openEditor(noteId: string): void {
     this.state = AppState.EDITOR;
-    const editor = new Editor(this.screen, this.store, noteId, this._config.cursor.insertStyle);
+    const editor = new Editor(this.screen, this.store, noteId, this._config.cursor.insertStyle, this._tmuxMouseOn);
     editor.on('quit', () => {
       if (this.store.hasNotes()) {
         this._showList();

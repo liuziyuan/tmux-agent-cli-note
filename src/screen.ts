@@ -8,6 +8,8 @@ const ANSI: AnsiCodes = {
   setBlockCursor: '\x1b[2 q',
   setBarCursor: '\x1b[6 q',
   resetCursorStyle: '\x1b[0 q',
+  enableMouseTracking: '\x1b[?1002h',
+  disableMouseTracking: '\x1b[?1000l',
   clearLine: '\x1b[2K',
   clearLineRight: '\x1b[K',
   bold: '\x1b[1m',
@@ -52,10 +54,12 @@ export class Screen {
     process.stdin.resume();
     process.stdin.setEncoding('utf-8');
     process.stdout.write(ANSI.hideCursor);
+    process.stdout.write(ANSI.enableMouseTracking);
     this.clear();
   }
 
   destroy(): void {
+    process.stdout.write(ANSI.disableMouseTracking);
     process.stdout.write(ANSI.resetCursorStyle);
     process.stdout.write(ANSI.showCursor);
     process.stdout.write(ANSI.reset);
@@ -90,7 +94,7 @@ export class Screen {
     this.writeAt(1, 1, title);
   }
 
-  drawStatusBar(mode: string, hint?: string): void {
+  drawStatusBar(mode: string, hint?: string, mouseOn?: boolean): void {
     const row = this.rows - 1;
     let modeLabel = '';
     if (mode === 'INSERT') {
@@ -103,7 +107,13 @@ export class Screen {
       modeLabel = `${ANSI.fg.cyan} -- LIST --${ANSI.reset}`;
     }
     const hintText = hint ? `${ANSI.dim}${hint}${ANSI.reset}` : '';
-    const content = modeLabel + '  ' + hintText;
+    let mouseLabel = '';
+    if (mouseOn === true) {
+      mouseLabel = `  ${ANSI.fg.green}Mouse:ON${ANSI.reset}`;
+    } else if (mouseOn === false) {
+      mouseLabel = `  ${ANSI.dim}Mouse:OFF${ANSI.reset}`;
+    }
+    const content = modeLabel + '  ' + hintText + mouseLabel;
     this.writeAt(row, 1, content);
   }
 
