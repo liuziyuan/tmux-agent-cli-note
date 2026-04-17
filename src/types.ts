@@ -25,6 +25,8 @@ export interface AnsiCodes {
   setBlockCursor: string;
   setBarCursor: string;
   resetCursorStyle: string;
+  enableMouseTracking: string;
+  disableMouseTracking: string;
   fg: AnsiFg;
   bg: AnsiBg;
   cursorTo: (row: number, col: number) => string;

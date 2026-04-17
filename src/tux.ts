@@ -6,6 +6,15 @@ class Tmux {
     return !!process.env.TMUX;
   }
 
+  static isMouseEnabled(): boolean {
+    try {
+      const output = execSync('tmux show -gv mouse', { encoding: 'utf-8' }).trim();
+      return output === 'on';
+    } catch {
+      return false;
+    }
+  }
+
   static currentPaneId(): string | undefined {
     return process.env.TMUX_PANE;
   }
