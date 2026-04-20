@@ -60,63 +60,67 @@ class Tmux {
     return result;
   }
 
+  private static readonly SHELLS = new Set([
+    'zsh', 'bash', 'fish', 'sh', 'dash', 'ksh', 'csh', 'tcsh', 'nu', 'pwsh', 'xonsh',
+  ]);
+
+  private static readonly AGENT_BY_CMD: Array<{ test: (cmd: string) => boolean; info: AgentInfo }> = [
+    { test: cmd => cmd.includes('claude'), info: { type: 'claude', label: 'Claude Code' } },
+    { test: cmd => cmd.includes('opencode'), info: { type: 'opencode', label: 'OpenCode' } },
+    { test: cmd => cmd.includes('codex'), info: { type: 'codex', label: 'Codex' } },
+    { test: cmd => cmd.includes('gemini'), info: { type: 'gemini', label: 'Gemini CLI' } },
+    { test: cmd => cmd.includes('copilot'), info: { type: 'copilot', label: 'GitHub Copilot' } },
+  ];
+
   private static _detectAgent(paneId: string): AgentInfo | null {
-    // Check command name first (most reliable)
+    let cmd = '';
     try {
-      const cmd = execSync(
+      cmd = execSync(
         `tmux display-message -t ${paneId} -p '#{pane_current_command}'`,
         { encoding: 'utf-8' }
       ).trim().toLowerCase();
-
-      if (cmd.includes('claude')) {
-        return { type: 'claude', label: 'Claude Code' };
-      }
-      if (cmd.includes('opencode')) {
-        return { type: 'opencode', label: 'OpenCode' };
-      }
-      if (cmd.includes('codex')) {
-        return { type: 'codex', label: 'Codex' };
-      }
-      if (cmd.includes('gemini')) {
-        return { type: 'gemini', label: 'Gemini CLI' };
-      }
-      if (cmd.includes('copilot')) {
-        return { type: 'copilot', label: 'GitHub Copilot' };
-      }
-
-      // Shell detected — agent has exited, skip content fallback
-      const shells = ['zsh', 'bash', 'fish', 'sh', 'dash', 'ksh', 'csh', 'tcsh'];
-      if (shells.includes(cmd)) {
-        return null;
-      }
     } catch {
       /* ignore */
     }
 
-    // Fallback: inspect pane content
-    const content = Tmux.capturePane(paneId).toLowerCase();
-    if (content.includes('claude')) {
-      return { type: 'claude', label: 'Claude Code' };
-    }
-    if (content.includes('opencode')) {
-      return { type: 'opencode', label: 'OpenCode' };
-    }
-    if (content.includes('codex')) {
-      return { type: 'codex', label: 'Codex' };
-    }
-    if (content.includes('gemini')) {
-      return { type: 'gemini', label: 'Gemini CLI' };
-    }
-    if (content.includes('copilot')) {
-      return { type: 'copilot', label: 'GitHub Copilot' };
+    // Tier 1: exact command name match
+    for (const { test, info } of Tmux.AGENT_BY_CMD) {
+      if (test(cmd)) return info;
     }
 
-    // Last resort: any pane with a rich prompt indicator (likely an AI tool)
-    if (content.includes('❯')) {
-      return { type: 'unknown', label: 'Unknown Agent' };
+    // Known shell → agent definitely not running
+    if (Tmux.SHELLS.has(cmd)) return null;
+
+    // Tier 2: Claude Code standalone binary shows version as command name (e.g. "2.1.112")
+    if (/^\d+\.\d+\.\d+$/.test(cmd)) {
+      const content = Tmux.capturePane(paneId);
+      if (content.includes('⏺')) {
+        return { type: 'claude', label: 'Claude Code' };
+      }
+    }
+
+    // Tier 3: content fallback for wrapper commands (volta-shim, node, npx, etc.)
+    // Only check recent output to avoid stale scrollback matches
+    if (cmd && !Tmux.SHELLS.has(cmd)) {
+      const bottom = Tmux._captureRecent(paneId);
+      for (const { test, info } of Tmux.AGENT_BY_CMD) {
+        if (test(bottom)) return info;
+      }
     }
 
     return null;
+  }
+
+  /** Capture only the last 10 lines to reduce stale content false positives */
+  private static _captureRecent(paneId: string): string {
+    try {
+      return execSync(
+        `tmux capture-pane -t ${paneId} -p -S -10`,
+        { encoding: 'utf-8' }
+      ).toLowerCase();
+    } catch {
+      return '';
+    }
   }
 
   static sendToPane(paneId: string, text: string): boolean {
