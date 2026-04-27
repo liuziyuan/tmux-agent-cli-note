@@ -5,6 +5,7 @@ export interface AnsiFg {
   red: string;
   white: string;
   gray: string;
+  magenta: string;
 }
 
 export interface AnsiBg {
@@ -75,6 +76,7 @@ export const enum EditorMode {
   NORMAL = 'NORMAL',
   INSERT = 'INSERT',
   COMMAND = 'COMMAND',
+  FILE_SELECT = 'FILE_SELECT',
 }
 
 export interface Cursor {

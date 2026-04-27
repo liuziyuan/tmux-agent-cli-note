@@ -1,17 +1,19 @@
 'use strict';
 
 import { EventEmitter } from 'events';
-import { basename } from 'path';
+import { basename, relative } from 'path';
 import { Cursor, EditorEvents, CursorStyle } from './types';
 import { ANSI } from './screen';
 import type { Screen } from './screen';
 import type { Store } from './store';
+import { FilePicker } from './file-picker';
 
 // Import EditorMode as a regular enum to avoid const enum issues
 const EditorMode = {
   NORMAL: 'NORMAL',
   INSERT: 'INSERT',
   COMMAND: 'COMMAND',
+  FILE_SELECT: 'FILE_SELECT',
 } as const;
 
 type EditorMode = (typeof EditorMode)[keyof typeof EditorMode];
@@ -106,6 +108,8 @@ export class Editor extends EventEmitter {
   pendingDelete: boolean;
   private _insertCursorStyle: CursorStyle;
   private _tmuxMouseOn: boolean;
+  private _filePicker: FilePicker | null = null;
+  private _pendingAt = false;
 
   // Re-export for type checking
   static ANSI = ANSI;
@@ -170,6 +174,11 @@ export class Editor extends EventEmitter {
       this._handleInsert(key);
     } else if (this.mode === EditorMode.COMMAND) {
       this._handleCommand(key);
+    } else if (this.mode === EditorMode.FILE_SELECT) {
+      if (this._filePicker) {
+        this._filePicker.handleKey(key);
+        this.render();
+      }
     }
   }
 
@@ -273,6 +282,7 @@ export class Editor extends EventEmitter {
   private _handleInsert(key: string): void {
     if (key === '\x1b') {
       // Esc
+      this._pendingAt = false;
       this._save();
       this._setMode(EditorMode.NORMAL);
       return;
@@ -295,6 +305,14 @@ export class Editor extends EventEmitter {
 
     // Regular character (including multi-byte)
     if (key.length === 1 || key.charCodeAt(0) > 127) {
+      // @@ triggers file picker
+      if (key === '@' && this._pendingAt) {
+        this._pendingAt = false;
+        this._backspace();
+        this._openFilePicker();
+        return;
+      }
+      this._pendingAt = (key === '@');
       this._insertChar(key);
       this.render();
       return;
@@ -434,6 +452,29 @@ export class Editor extends EventEmitter {
     this.mode = mode;
     this._applyCursorShape(mode);
     this.render();
+  }
+
+  private _openFilePicker(): void {
+    const savedCursor = { ...this.cursor };
+    this._filePicker = new FilePicker(this.screen, this.store.dir);
+
+    this._filePicker.on('select', (relativePath: string) => {
+      this.cursor = { ...savedCursor };
+      const line = this.lines[this.cursor.row] || '';
+      const col = Math.min(this.cursor.col, line.length);
+      this.lines[this.cursor.row] = line.slice(0, col) + relativePath + line.slice(col);
+      this.cursor.col = col + relativePath.length;
+      this._filePicker = null;
+      this._setMode(EditorMode.INSERT);
+    });
+
+    this._filePicker.on('cancel', () => {
+      this.cursor = { ...savedCursor };
+      this._filePicker = null;
+      this._setMode(EditorMode.INSERT);
+    });
+
+    this._setMode(EditorMode.FILE_SELECT);
   }
 
   private _applyCursorShape(mode: EditorMode): void {
@@ -823,29 +864,16 @@ export class Editor extends EventEmitter {
 
   // --- Rendering ---
 
-  render(): void {
-    const startRow = this.contentStartRow;
-    const visible = this.visibleLines;
-    const maxWidth = this.screen.contentWidth();
-
-    // Title bar
-    const dirName = basename(this.store.dir);
-    this.screen.drawTitleBar(dirName, this.store.listNotes().length);
-
-    // Content area - with text wrapping
-    this.screen.hideCursor();
-
-    // Render lines with wrapping support
+  private _renderContent(startRow: number, maxRows: number, maxWidth: number): void {
     let displayRow = 0;
-    for (let lineIdx = this.scrollOffset; lineIdx < this.lines.length && displayRow < visible; lineIdx++) {
+    for (let lineIdx = this.scrollOffset; lineIdx < this.lines.length && displayRow < maxRows; lineIdx++) {
       const line = this.lines[lineIdx];
       const wrapLines = this._wrapLine(line, maxWidth);
       const lineNum = String(lineIdx + 1).padStart(3);
 
-      for (let wrapIdx = 0; wrapIdx < wrapLines.length && displayRow < visible; wrapIdx++) {
+      for (let wrapIdx = 0; wrapIdx < wrapLines.length && displayRow < maxRows; wrapIdx++) {
         const screenRow = startRow + displayRow;
 
-        // Show line number only for first wrapped line of each logical line
         let prefix;
         if (wrapIdx === 0) {
           prefix = ANSI.dim + lineNum + ' ' + ANSI.reset;
@@ -858,48 +886,101 @@ export class Editor extends EventEmitter {
       }
     }
 
-    // Clear remaining rows
-    for (; displayRow < visible; displayRow++) {
-      const screenRow = startRow + displayRow;
-      this.screen.clearRow(screenRow);
+    for (; displayRow < maxRows; displayRow++) {
+      this.screen.clearRow(startRow + displayRow);
+    }
+  }
+
+  private _renderSeparator(row: number): void {
+    const cols = this.screen.cols;
+    const picker = this._filePicker;
+    const dirDisplay = picker
+      ? (picker.currentDir === this.store.dir ? '.' : relative(this.store.dir, picker.currentDir))
+      : '';
+    const label = ` File Picker `;
+    const suffix = ` ${dirDisplay} `;
+    const totalLabel = label + suffix;
+    const labelWidth = displayWidth(totalLabel);
+    const remaining = Math.max(0, cols - 2 - labelWidth);
+    const leftDash = Math.floor(remaining / 2);
+    const rightDash = remaining - leftDash;
+    const line = ANSI.dim
+      + '─'.repeat(leftDash)
+      + ANSI.reset
+      + ANSI.fg.magenta + ANSI.bold + label + ANSI.reset
+      + ANSI.dim + suffix + ANSI.reset
+      + '─'.repeat(rightDash);
+    this.screen.writeAt(row, 1, line);
+  }
+
+  render(): void {
+    const startRow = this.contentStartRow;
+    const totalVisible = this.visibleLines;
+    const maxWidth = this.screen.contentWidth();
+
+    // Title bar
+    const dirName = basename(this.store.dir);
+    this.screen.drawTitleBar(dirName, this.store.listNotes().length);
+
+    this.screen.hideCursor();
+
+    if (this.mode === EditorMode.FILE_SELECT && this._filePicker) {
+      // Split rendering: editor top 40%, file picker bottom 60%
+      const editorRows = Math.max(3, Math.floor(totalVisible * 0.4));
+      this._renderContent(startRow, editorRows, maxWidth);
+
+      const separatorRow = startRow + editorRows;
+      this._renderSeparator(separatorRow);
+
+      const pickerStartRow = separatorRow + 1;
+      const pickerRows = totalVisible - editorRows - 1;
+      this._filePicker.render(pickerStartRow, Math.max(1, pickerRows));
+    } else {
+      // Normal full-screen rendering
+      this._renderContent(startRow, totalVisible, maxWidth);
     }
 
     // Status bar
     const mode = this.mode;
     let hint = '';
     if (mode === EditorMode.NORMAL) {
-      hint = 'i:insert  q:quit  h/j/k/l:move  0/$:行首末  x:del  dd:del line  D:del to end';
+      hint = 'i:insert  q:quit  h/j/k/l:move  0/$:home/end  x:del  dd:del line  D:del to end';
     } else if (mode === EditorMode.INSERT) {
-      hint = 'Esc:back to normal';
+      hint = 'Esc:normal  @@:file';
     } else if (mode === EditorMode.COMMAND) {
       hint = 'Enter:exec  Esc:cancel  s:send  q:quit  ls:list';
+    } else if (mode === EditorMode.FILE_SELECT) {
+      hint = 'j/k:move  Enter:open/select  h/Backspace:back  Esc:cancel';
     }
     this.screen.drawStatusBar(mode, hint, this._tmuxMouseOn);
 
     // Command line
     if (mode === EditorMode.COMMAND) {
       this.screen.drawCommandLine(':' + this.commandBuf);
+    } else if (mode === EditorMode.FILE_SELECT && this._filePicker) {
+      const relPath = this._filePicker.currentDir === this.store.dir
+        ? '.'
+        : relative(this.store.dir, this._filePicker.currentDir);
+      this.screen.drawCommandLine(` ${relPath}/`);
     } else {
       this.screen.drawCommandLine('');
     }
 
     // Cursor position with wrap support
     if (mode === EditorMode.INSERT || mode === EditorMode.NORMAL) {
-      // Calculate display row, accounting for wrapped lines
       let displayRow = 0;
       for (let i = this.scrollOffset; i < this.cursor.row && i < this.lines.length; i++) {
         const wrapLines = this._wrapLine(this.lines[i], maxWidth);
         displayRow += wrapLines.length;
       }
 
-      // Add wrap offset for cursor line
       const cursorPos = this._getCursorDisplayPos(this.cursor.row, this.cursor.col);
       displayRow += cursorPos.lineOffset;
 
       const screenRow = startRow + displayRow;
       const screenCol = 5 + cursorPos.col;
 
-      if (screenRow >= startRow && screenRow < startRow + visible) {
+      if (screenRow >= startRow && screenRow < startRow + totalVisible) {
         this._applyCursorShape(mode);
         this.screen.moveCursor(screenRow, screenCol);
       }

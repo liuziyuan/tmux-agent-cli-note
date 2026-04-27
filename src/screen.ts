@@ -22,6 +22,7 @@ const ANSI: AnsiCodes = {
     red: '\x1b[31m',
     white: '\x1b[37m',
     gray: '\x1b[90m',
+    magenta: '\x1b[35m',
   },
   bg: {
     reverse: '\x1b[7m',
@@ -105,6 +106,8 @@ export class Screen {
       modeLabel = `${ANSI.fg.cyan} -- COMMAND --${ANSI.reset}`;
     } else if (mode === 'LIST') {
       modeLabel = `${ANSI.fg.cyan} -- LIST --${ANSI.reset}`;
+    } else if (mode === 'FILE_SELECT') {
+      modeLabel = `${ANSI.fg.magenta}${ANSI.bold} -- FILE PICKER --${ANSI.reset}`;
     }
     const hintText = hint ? `${ANSI.dim}${hint}${ANSI.reset}` : '';
     let mouseLabel = '';
