@@ -105,6 +105,12 @@ export interface ListViewEvents {
   empty: [];
 }
 
+export interface MouseEvent {
+  row: number;      // 1-based screen row
+  col: number;      // 1-based screen col
+  type: 'press' | 'drag' | 'release';
+}
+
 export const enum AppState {
   LIST    = 'LIST',
   EDITOR  = 'EDITOR',

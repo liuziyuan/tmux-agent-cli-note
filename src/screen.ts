@@ -8,7 +8,7 @@ const ANSI: AnsiCodes = {
   setBlockCursor: '\x1b[2 q',
   setBarCursor: '\x1b[6 q',
   resetCursorStyle: '\x1b[0 q',
-  enableMouseTracking: '\x1b[?1002h',
+  enableMouseTracking: '\x1b[?1002h\x1b[?1006h',
   disableMouseTracking: '\x1b[?1000l',
   clearLine: '\x1b[2K',
   clearLineRight: '\x1b[K',

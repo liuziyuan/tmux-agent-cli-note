@@ -2,7 +2,7 @@
 
 import { EventEmitter } from 'events';
 import { basename, relative } from 'path';
-import { Cursor, EditorEvents, CursorStyle } from './types';
+import { Cursor, EditorEvents, CursorStyle, MouseEvent } from './types';
 import { ANSI } from './screen';
 import type { Screen } from './screen';
 import type { Store } from './store';
@@ -110,6 +110,10 @@ export class Editor extends EventEmitter {
   private _tmuxMouseOn: boolean;
   private _filePicker: FilePicker | null = null;
   private _pendingAt = false;
+  private _selection: { startRow: number; startCol: number; endRow: number; endCol: number } | null = null;
+  private _yankRegister: string = '';
+  private _dragStart: { row: number; col: number } | null = null;
+  private _pendingYank: boolean = false;
 
   // Re-export for type checking
   static ANSI = ANSI;
@@ -190,7 +194,17 @@ export class Editor extends EventEmitter {
       this.render();
       return;
     }
+    // yy: yank line
+    if (key === 'y' && this._pendingYank) {
+      this._pendingYank = false;
+      const line = this.lines[this.cursor.row] || '';
+      this._yankRegister = line + '\n';
+      this._copyToClipboard(this._yankRegister);
+      this.render();
+      return;
+    }
     this.pendingDelete = false;
+    this._pendingYank = false;
 
     switch (key) {
       case '0':
@@ -276,6 +290,32 @@ export class Editor extends EventEmitter {
         this._setMode(EditorMode.INSERT);
         this.render();
         break;
+      case 'p':
+        this._pasteAfter();
+        this.render();
+        break;
+      case 'P':
+        this._pasteBefore();
+        this.render();
+        break;
+      case '\x03': // Ctrl+C: copy selection
+        {
+          const sel = this._normalizedSelection();
+          if (sel && (sel.startRow !== sel.endRow || sel.startCol !== sel.endCol)) {
+            this._yankRegister = this._extractText(sel.startRow, sel.startCol, sel.endRow, sel.endCol);
+            this._copyToClipboard(this._yankRegister);
+          }
+          this._selection = null;
+          this.render();
+        }
+        break;
+      case '\x16': // Ctrl+V: paste
+        this._pasteAfter();
+        this.render();
+        break;
+      case 'y':
+        this._pendingYank = true;
+        break;
     }
   }
 
@@ -285,6 +325,15 @@ export class Editor extends EventEmitter {
       this._pendingAt = false;
       this._save();
       this._setMode(EditorMode.NORMAL);
+      return;
+    }
+
+    if (key === '\x16') {
+      // Ctrl+V: paste from register
+      if (this._yankRegister) {
+        this._insertText(this._yankRegister);
+      }
+      this.render();
       return;
     }
 
@@ -617,6 +666,29 @@ export class Editor extends EventEmitter {
     this.cursor.col = col + 1;
   }
 
+  private _insertText(text: string): void {
+    const pasteLines = text.split('\n');
+    const line = this.lines[this.cursor.row] || '';
+    const col = Math.min(this.cursor.col, line.length);
+    const before = line.slice(0, col);
+    const after = line.slice(col);
+
+    if (pasteLines.length === 1) {
+      this.lines[this.cursor.row] = before + pasteLines[0] + after;
+      this.cursor.col = col + pasteLines[0].length;
+    } else {
+      this.lines[this.cursor.row] = before + pasteLines[0];
+      for (let i = 1; i < pasteLines.length - 1; i++) {
+        this.lines.splice(this.cursor.row + i, 0, pasteLines[i]);
+      }
+      const lastIdx = pasteLines.length - 1;
+      this.lines.splice(this.cursor.row + lastIdx, 0, pasteLines[lastIdx] + after);
+      this.cursor.row += lastIdx;
+      this.cursor.col = pasteLines[lastIdx].length;
+    }
+    this._adjustScroll();
+  }
+
   private _backspace(): void {
     if (this.cursor.col > 0) {
       const line = this.lines[this.cursor.row];
@@ -677,6 +749,43 @@ export class Editor extends EventEmitter {
   private _insertLineAbove(): void {
     this.lines.splice(this.cursor.row, 0, '');
     this.cursor.col = 0;
+  }
+
+  private _pasteAfter(): void {
+    const text = this._yankRegister;
+    if (!text) return;
+    if (text.endsWith('\n')) {
+      // Line-wise paste: insert lines below current line
+      const pasteLines = text.slice(0, -1).split('\n');
+      this.lines.splice(this.cursor.row + 1, 0, ...pasteLines);
+      this.cursor.row++;
+      this.cursor.col = 0;
+    } else {
+      // Character-wise paste: insert after cursor
+      const line = this.lines[this.cursor.row] || '';
+      const col = Math.min(this.cursor.col, line.length);
+      this.lines[this.cursor.row] = line.slice(0, col + 1) + text + line.slice(col + 1);
+      this.cursor.col = col + 1 + text.length;
+    }
+    this._adjustScroll();
+  }
+
+  private _pasteBefore(): void {
+    const text = this._yankRegister;
+    if (!text) return;
+    if (text.endsWith('\n')) {
+      // Line-wise paste: insert lines above current line
+      const pasteLines = text.slice(0, -1).split('\n');
+      this.lines.splice(this.cursor.row, 0, ...pasteLines);
+      this.cursor.col = 0;
+    } else {
+      // Character-wise paste: insert at cursor
+      const line = this.lines[this.cursor.row] || '';
+      const col = Math.min(this.cursor.col, line.length);
+      this.lines[this.cursor.row] = line.slice(0, col) + text + line.slice(col);
+      this.cursor.col = col + text.length;
+    }
+    this._adjustScroll();
   }
 
   private _moveUp(): void {
@@ -798,16 +907,38 @@ export class Editor extends EventEmitter {
   }
 
   /**
-   * Handle mouse click: convert screen coordinates to logical cursor position
-   * screenRow/screenCol are 1-based terminal coordinates
+   * Handle mouse event: press/drag/release for selection
    */
-  handleMouseClick(screenRow: number, screenCol: number): void {
-    const pos = this._screenToLogicalPos(screenRow, screenCol);
+  handleMouseEvent(event: MouseEvent): void {
+    const pos = this._screenToLogicalPos(event.row, event.col);
     if (!pos) return;
-    this.cursor.row = pos.row;
-    this.cursor.col = pos.col;
-    this._adjustScroll();
-    this.render();
+
+    if (event.type === 'press') {
+      this._dragStart = { row: pos.row, col: pos.col };
+      this._selection = null;
+      this.cursor.row = pos.row;
+      this.cursor.col = pos.col;
+      this._adjustScroll();
+      this.render();
+    } else if (event.type === 'drag' && this._dragStart) {
+      const s = this._dragStart;
+      this._selection = { startRow: s.row, startCol: s.col, endRow: pos.row, endCol: pos.col };
+      this.cursor.row = pos.row;
+      this.cursor.col = pos.col;
+      this._adjustScroll();
+      this.render();
+    } else if (event.type === 'release') {
+      if (this._dragStart) {
+        const norm = this._normalize(this._dragStart.row, this._dragStart.col, pos.row, pos.col);
+        if (norm.startRow !== norm.endRow || norm.startCol !== norm.endCol) {
+          this._yankRegister = this._extractText(norm.startRow, norm.startCol, norm.endRow, norm.endCol);
+          this._copyToClipboard(this._yankRegister);
+        }
+      }
+      this._selection = null;
+      this._dragStart = null;
+      this.render();
+    }
   }
 
   /**
@@ -862,9 +993,61 @@ export class Editor extends EventEmitter {
     return { row: logicalRow, col };
   }
 
+  /** Normalize two positions so start <= end */
+  private _normalize(r1: number, c1: number, r2: number, c2: number): { startRow: number; startCol: number; endRow: number; endCol: number } {
+    if (r1 < r2 || (r1 === r2 && c1 <= c2)) {
+      return { startRow: r1, startCol: c1, endRow: r2, endCol: c2 };
+    }
+    return { startRow: r2, startCol: c2, endRow: r1, endCol: c1 };
+  }
+
+  /** Get normalized current selection, or null if none */
+  private _normalizedSelection(): { startRow: number; startCol: number; endRow: number; endCol: number } | null {
+    if (!this._selection) return null;
+    return this._normalize(this._selection.startRow, this._selection.startCol, this._selection.endRow, this._selection.endCol);
+  }
+
+  /** Extract text between two logical positions (inclusive start, exclusive end) */
+  private _extractText(startRow: number, startCol: number, endRow: number, endCol: number): string {
+    if (startRow === endRow) {
+      const line = this.lines[startRow] || '';
+      return line.slice(startCol, endCol);
+    }
+    const parts: string[] = [];
+    parts.push((this.lines[startRow] || '').slice(startCol));
+    for (let r = startRow + 1; r < endRow; r++) {
+      parts.push(this.lines[r] || '');
+    }
+    parts.push((this.lines[endRow] || '').slice(0, endCol));
+    return parts.join('\n');
+  }
+
+  /** Copy text to system clipboard + tmux buffer */
+  private _copyToClipboard(text: string): void {
+    if (!text) return;
+    try {
+      const { execSync } = require('child_process');
+      if (process.platform === 'darwin') {
+        execSync('pbcopy', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+      } else {
+        execSync('xclip -selection clipboard', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+      }
+    } catch {
+      // clipboard tool not available — ignore
+    }
+    try {
+      const { execSync } = require('child_process');
+      const escaped = text.replace(/'/g, "'\\''");
+      execSync(`tmux set-buffer -- '${escaped}'`, { stdio: 'ignore' });
+    } catch {
+      // not in tmux — ignore
+    }
+  }
+
   // --- Rendering ---
 
   private _renderContent(startRow: number, maxRows: number, maxWidth: number): void {
+    const sel = this._normalizedSelection();
     let displayRow = 0;
     for (let lineIdx = this.scrollOffset; lineIdx < this.lines.length && displayRow < maxRows; lineIdx++) {
       const line = this.lines[lineIdx];
@@ -881,7 +1064,30 @@ export class Editor extends EventEmitter {
           prefix = ANSI.dim + '    ' + ANSI.reset;
         }
 
-        this.screen.writeAt(screenRow, 1, prefix + wrapLines[wrapIdx]);
+        // Char offset range for this wrap segment within the logical line
+        let segStart = 0;
+        for (let w = 0; w < wrapIdx; w++) segStart += wrapLines[w].length;
+        const segEnd = segStart + wrapLines[wrapIdx].length;
+
+        let rendered: string;
+        if (sel && lineIdx >= sel.startRow && lineIdx <= sel.endRow) {
+          const selStart = lineIdx === sel.startRow ? Math.max(sel.startCol, segStart) : segStart;
+          const selEnd = lineIdx === sel.endRow ? Math.min(sel.endCol, segEnd) : segEnd;
+          if (selStart < segEnd && selEnd > segStart) {
+            const localStart = selStart - segStart;
+            const localEnd = Math.min(selEnd - segStart, wrapLines[wrapIdx].length);
+            const seg = wrapLines[wrapIdx];
+            rendered = seg.slice(0, localStart)
+              + ANSI.bg.reverse + seg.slice(localStart, localEnd) + ANSI.bg.unreverse
+              + seg.slice(localEnd);
+          } else {
+            rendered = wrapLines[wrapIdx];
+          }
+        } else {
+          rendered = wrapLines[wrapIdx];
+        }
+
+        this.screen.writeAt(screenRow, 1, prefix + rendered);
         displayRow++;
       }
     }
@@ -944,7 +1150,7 @@ export class Editor extends EventEmitter {
     const mode = this.mode;
     let hint = '';
     if (mode === EditorMode.NORMAL) {
-      hint = 'i:insert  q:quit  h/j/k/l:move  0/$:home/end  x:del  dd:del line  D:del to end';
+      hint = 'i:insert  q:quit  h/j/k/l:move  x:del  dd:del line  Ctrl-C:copy  Ctrl-V:paste  yy:yank';
     } else if (mode === EditorMode.INSERT) {
       hint = 'Esc:normal  @@:file';
     } else if (mode === EditorMode.COMMAND) {
