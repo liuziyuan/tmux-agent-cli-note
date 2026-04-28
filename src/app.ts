@@ -5,7 +5,7 @@ import { Store } from './store';
 import { Editor } from './editor';
 import { ListView } from './list-view';
 import Tmux from './tux';
-import { AppState, AgentPane, Config } from './types';
+import { AppState, AgentPane, Config, MouseEvent } from './types';
 import { loadConfig } from './config';
 
 export class App {
@@ -76,7 +76,7 @@ export class App {
     if (keys !== null) {
       this._keyBuf = '';
       for (const key of keys) {
-        if (typeof key === 'object' && key._mouse) {
+        if (typeof key === 'object') {
           this._dispatchMouse(key);
         } else {
           this._dispatchKey(key as string);
@@ -85,10 +85,10 @@ export class App {
     }
   }
 
-  private _parseKeys(buf: string): (string | { _mouse: true; row: number; col: number; button: number })[] | null {
+  private _parseKeys(buf: string): (string | MouseEvent)[] | null {
     if (buf.length === 0) return null;
 
-    const keys: (string | { _mouse: true; row: number; col: number; button: number })[] = [];
+    const keys: (string | MouseEvent)[] = [];
     let i = 0;
     let pending = false;
 
@@ -199,12 +199,17 @@ export class App {
   }
 
   /** Parse X10 mouse: button/col/row bytes (each offset by 32) */
-  private _parseX10Mouse(bBtn: number, bCol: number, bRow: number): { _mouse: true; row: number; col: number; button: number } | null {
-    const button = bBtn & 3; // 0=left, 1=middle, 2=right
-    if (button !== 0) return null; // only handle left click
-    const col = bCol - 32; // 1-based
-    const row = bRow - 32; // 1-based
-    return { _mouse: true, row, col, button };
+  private _parseX10Mouse(bBtn: number, bCol: number, bRow: number): MouseEvent | null {
+    const btnType = bBtn & 3; // 0=left, 1=middle, 2=right, 3=release
+    if (btnType === 3) {
+      return { row: bRow - 32, col: bCol - 32, type: 'release' };
+    }
+    if (btnType !== 0) return null;
+    const col = bCol - 32;
+    const row = bRow - 32;
+    const isMotion = (bBtn & 32) !== 0;
+    const type = isMotion ? 'drag' : 'press';
+    return { row, col, type };
   }
 
   /** Find end of SGR mouse sequence starting after \x1b[< — returns index of M/m terminator */
@@ -218,20 +223,26 @@ export class App {
     return -1; // incomplete
   }
 
-  /** Parse SGR mouse: \x1b[<btn;col;rowM */
-  private _parseSgrMouse(seq: string): { _mouse: true; row: number; col: number; button: number } | null {
-    // seq = "\x1b[<btn;col;rowM"
+  /** Parse SGR mouse: \x1b[<btn;col;rowM or \x1b[<btn;col;rowm */
+  private _parseSgrMouse(seq: string): MouseEvent | null {
     const match = seq.match(/^\x1b\[<(\d+);(\d+);(\d+)(M|m)$/);
     if (!match) return null;
-    const button = parseInt(match[1], 10);
+    const rawBtn = parseInt(match[1], 10);
+    const btnType = rawBtn & 3;
+    if (btnType !== 0) return null;
+    const col = parseInt(match[2], 10);
+    const row = parseInt(match[3], 10);
     const isRelease = match[4] === 'm';
-    if (isRelease) return null; // only handle press
-    // button 0=left, 1=middle, 2=right, 32=drag, 34=move...
-    const btnType = button & 3; // mask motion/wheel bits
-    if (btnType !== 0) return null; // only handle left click
-    const col = parseInt(match[2], 10); // 1-based
-    const row = parseInt(match[3], 10); // 1-based
-    return { _mouse: true, row, col, button: 0 };
+    const isMotion = (rawBtn & 32) !== 0;
+    let type: 'press' | 'drag' | 'release';
+    if (isRelease) {
+      type = 'release';
+    } else if (isMotion) {
+      type = 'drag';
+    } else {
+      type = 'press';
+    }
+    return { row, col, type };
   }
 
   private _dispatchKey(key: string): void {
@@ -272,9 +283,9 @@ export class App {
     }
   }
 
-  private _dispatchMouse(event: { row: number; col: number; button: number }): void {
+  private _dispatchMouse(event: MouseEvent): void {
     if (this.state === AppState.EDITOR && this.currentView instanceof Editor) {
-      this.currentView.handleMouseClick(event.row, event.col);
+      this.currentView.handleMouseEvent(event);
     }
   }
 
