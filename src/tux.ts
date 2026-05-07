@@ -125,14 +125,14 @@ class Tmux {
 
   static sendToPane(paneId: string, text: string): boolean {
     try {
-      // Use set-buffer + paste-buffer to handle multi-line text
-      execSync('tmux set-buffer -w -- ' + JSON.stringify(text), { encoding: 'utf-8' });
+      // load-buffer from stdin preserves real newlines (unlike set-buffer -w which mangles them)
+      execSync('tmux load-buffer -', { input: text, encoding: 'utf-8' });
       execSync(`tmux paste-buffer -t ${paneId}`);
       return true;
     } catch {
-      // Fallback: load-buffer from stdin
+      // Fallback: set-buffer with shell-escaped text
       try {
-        execSync('tmux load-buffer -', { input: text, encoding: 'utf-8' });
+        execSync('tmux set-buffer -w -- ' + JSON.stringify(text), { encoding: 'utf-8' });
         execSync(`tmux paste-buffer -t ${paneId}`);
         return true;
       } catch {
