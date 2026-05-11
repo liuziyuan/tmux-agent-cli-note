@@ -114,6 +114,8 @@ export class Editor extends EventEmitter {
   private _yankRegister: string = '';
   private _dragStart: { row: number; col: number } | null = null;
   private _pendingYank: boolean = false;
+  private _undoStack: { lines: string[]; cursor: Cursor; scrollOffset: number; selection: { startRow: number; startCol: number; endRow: number; endCol: number } | null }[] = [];
+  private _undoDepth: number = 50;
 
   // Re-export for type checking
   static ANSI = ANSI;
@@ -190,6 +192,7 @@ export class Editor extends EventEmitter {
     // dd: delete line
     if (key === 'd' && this.pendingDelete) {
       this.pendingDelete = false;
+      this._pushUndo();
       this._deleteLine();
       this.render();
       return;
@@ -220,6 +223,7 @@ export class Editor extends EventEmitter {
         this.render();
         break;
       case 'D':
+        this._pushUndo();
         this.lines[this.cursor.row] = (this.lines[this.cursor.row] || '').slice(0, this.cursor.col);
         this.render();
         break;
@@ -254,6 +258,7 @@ export class Editor extends EventEmitter {
         this.render();
         break;
       case 'x':
+        this._pushUndo();
         this._deleteCharUnderCursor();
         this.render();
         break;
@@ -281,22 +286,31 @@ export class Editor extends EventEmitter {
         this._setMode(EditorMode.INSERT);
         break;
       case 'o':
+        this._pushUndo();
         this._insertLineBelow();
         this._setMode(EditorMode.INSERT);
         this.render();
         break;
       case 'O':
+        this._pushUndo();
         this._insertLineAbove();
         this._setMode(EditorMode.INSERT);
         this.render();
         break;
       case 'p':
+        this._pushUndo();
         this._pasteAfter();
         this.render();
         break;
       case 'P':
+        this._pushUndo();
         this._pasteBefore();
         this.render();
+        break;
+      case '\x1a': // Ctrl+Z: undo
+        if (this._undo()) {
+          this.render();
+        }
         break;
       case '\x03': // Ctrl+C: copy selection
         {
@@ -310,6 +324,7 @@ export class Editor extends EventEmitter {
         }
         break;
       case '\x16': // Ctrl+V: paste
+        this._pushUndo();
         this._pasteAfter();
         this.render();
         break;
@@ -320,6 +335,14 @@ export class Editor extends EventEmitter {
   }
 
   private _handleInsert(key: string): void {
+    if (key === '\x1a') {
+      // Ctrl+Z: undo
+      if (this._undo()) {
+        this.render();
+      }
+      return;
+    }
+
     if (key === '\x1b') {
       // Esc
       this._pendingAt = false;
@@ -330,6 +353,7 @@ export class Editor extends EventEmitter {
 
     if (key === '\x16') {
       // Ctrl+V: paste from register
+      this._pushUndo();
       if (this._yankRegister) {
         this._insertText(this._yankRegister);
       }
@@ -339,6 +363,7 @@ export class Editor extends EventEmitter {
 
     if (key === '\x7f' || key === '\b') {
       // Backspace
+      this._pushUndo();
       if (!this._deleteSelection()) {
         this._backspace();
       }
@@ -348,6 +373,7 @@ export class Editor extends EventEmitter {
 
     if (key === '\r') {
       // Enter
+      this._pushUndo();
       this._deleteSelection();
       this._splitLine();
       this._adjustScroll();
@@ -366,6 +392,7 @@ export class Editor extends EventEmitter {
         return;
       }
       this._pendingAt = (key === '@');
+      this._pushUndo();
       this._deleteSelection();
       this._insertChar(key);
       this.render();
@@ -404,6 +431,7 @@ export class Editor extends EventEmitter {
     }
     // Delete key
     if (key === '\x1b[3~') {
+      this._pushUndo();
       if (!this._deleteSelection()) {
         this._deleteCharUnderCursor();
       }
@@ -455,6 +483,7 @@ export class Editor extends EventEmitter {
     }
     // Ctrl+Delete
     if (key === '\x1b[3;5~') {
+      this._pushUndo();
       this._deleteWordForward();
       this.render();
       return;
@@ -519,6 +548,7 @@ export class Editor extends EventEmitter {
     this._filePicker = new FilePicker(this.screen, this.store.dir);
 
     this._filePicker.on('select', (relativePath: string) => {
+      this._pushUndo();
       this.cursor = { ...savedCursor };
       const line = this.lines[this.cursor.row] || '';
       const col = Math.min(this.cursor.col, line.length);
@@ -1035,6 +1065,29 @@ export class Editor extends EventEmitter {
     return parts.join('\n');
   }
 
+  private _pushUndo(): void {
+    this._undoStack.push({
+      lines: [...this.lines],
+      cursor: { ...this.cursor },
+      scrollOffset: this.scrollOffset,
+      selection: this._selection ? { ...this._selection } : null,
+    });
+    if (this._undoStack.length > this._undoDepth) {
+      this._undoStack.shift();
+    }
+  }
+
+  private _undo(): boolean {
+    const snapshot = this._undoStack.pop();
+    if (!snapshot) return false;
+    this.lines = snapshot.lines;
+    this.cursor = snapshot.cursor;
+    this.scrollOffset = snapshot.scrollOffset;
+    this._selection = snapshot.selection;
+    this._adjustScroll();
+    return true;
+  }
+
   /** Delete currently selected text, position cursor at selection start. Returns true if selection existed. */
   private _deleteSelection(): boolean {
     const sel = this._normalizedSelection();
@@ -1185,9 +1238,9 @@ export class Editor extends EventEmitter {
     const mode = this.mode;
     let hint = '';
     if (mode === EditorMode.NORMAL) {
-      hint = 'i:insert  q:quit  h/j/k/l:move  x:del  dd:del line  Ctrl-C:copy  Ctrl-V:paste  yy:yank';
+      hint = 'i:insert  q:quit  h/j/k/l:move  x:del  dd:del line  Ctrl-C:copy  Ctrl-V:paste  Ctrl-Z:undo  yy:yank';
     } else if (mode === EditorMode.INSERT) {
-      hint = 'Esc:normal  @@:file';
+      hint = 'Esc:normal  Ctrl-Z:undo  @@:file';
     } else if (mode === EditorMode.COMMAND) {
       hint = 'Enter:exec  Esc:cancel  s:send  q:quit  ls:list';
     } else if (mode === EditorMode.FILE_SELECT) {
