@@ -339,13 +339,16 @@ export class Editor extends EventEmitter {
 
     if (key === '\x7f' || key === '\b') {
       // Backspace
-      this._backspace();
+      if (!this._deleteSelection()) {
+        this._backspace();
+      }
       this.render();
       return;
     }
 
     if (key === '\r') {
       // Enter
+      this._deleteSelection();
       this._splitLine();
       this._adjustScroll();
       this.render();
@@ -357,11 +360,13 @@ export class Editor extends EventEmitter {
       // @@ triggers file picker
       if (key === '@' && this._pendingAt) {
         this._pendingAt = false;
+        this._selection = null;
         this._backspace();
         this._openFilePicker();
         return;
       }
       this._pendingAt = (key === '@');
+      this._deleteSelection();
       this._insertChar(key);
       this.render();
       return;
@@ -369,16 +374,19 @@ export class Editor extends EventEmitter {
 
     // Handle escape sequences for special keys in insert mode
     if (key === '\x1b[A') {
+      this._selection = null;
       this._moveUp();
       this.render();
       return;
     }
     if (key === '\x1b[B') {
+      this._selection = null;
       this._moveDown();
       this.render();
       return;
     }
     if (key === '\x1b[C') {
+      this._selection = null;
       const line = this.lines[this.cursor.row] || '';
       if (this.cursor.col < line.length) {
         this.cursor.col++;
@@ -387,6 +395,7 @@ export class Editor extends EventEmitter {
       return;
     }
     if (key === '\x1b[D') {
+      this._selection = null;
       if (this.cursor.col > 0) {
         this.cursor.col--;
         this.render();
@@ -395,7 +404,9 @@ export class Editor extends EventEmitter {
     }
     // Delete key
     if (key === '\x1b[3~') {
-      this._deleteCharUnderCursor();
+      if (!this._deleteSelection()) {
+        this._deleteCharUnderCursor();
+      }
       this.render();
       return;
     }
@@ -933,9 +944,11 @@ export class Editor extends EventEmitter {
         if (norm.startRow !== norm.endRow || norm.startCol !== norm.endCol) {
           this._yankRegister = this._extractText(norm.startRow, norm.startCol, norm.endRow, norm.endCol);
           this._copyToClipboard(this._yankRegister);
+          this._selection = { startRow: norm.startRow, startCol: norm.startCol, endRow: norm.endRow, endCol: norm.endCol };
+        } else {
+          this._selection = null;
         }
       }
-      this._selection = null;
       this._dragStart = null;
       this.render();
     }
@@ -1020,6 +1033,28 @@ export class Editor extends EventEmitter {
     }
     parts.push((this.lines[endRow] || '').slice(0, endCol));
     return parts.join('\n');
+  }
+
+  /** Delete currently selected text, position cursor at selection start. Returns true if selection existed. */
+  private _deleteSelection(): boolean {
+    const sel = this._normalizedSelection();
+    if (!sel || (sel.startRow === sel.endRow && sel.startCol === sel.endCol)) return false;
+
+    if (sel.startRow === sel.endRow) {
+      const line = this.lines[sel.startRow];
+      this.lines[sel.startRow] = line.slice(0, sel.startCol) + line.slice(sel.endCol);
+    } else {
+      const before = (this.lines[sel.startRow] || '').slice(0, sel.startCol);
+      const after = (this.lines[sel.endRow] || '').slice(sel.endCol);
+      this.lines[sel.startRow] = before + after;
+      this.lines.splice(sel.startRow + 1, sel.endRow - sel.startRow);
+    }
+
+    this.cursor.row = sel.startRow;
+    this.cursor.col = sel.startCol;
+    this._selection = null;
+    this._adjustScroll();
+    return true;
   }
 
   /** Copy text to system clipboard + tmux buffer */
