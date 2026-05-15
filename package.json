@@ -9,7 +9,8 @@
   "files": [
     "dist/",
     "bin/",
-    "src/"
+    "src/",
+    "hooks/"
   ],
   "keywords": [
     "tmux",
