@@ -39,6 +39,9 @@ export interface Note {
   createdAt: string;   // ISO 8601
   updatedAt: string;
   sentAt: string | null;
+  sentToPane: string | null;
+  sessionId: string | null;
+  agentType: AgentType | null;
 }
 
 export interface NotePreview {
@@ -47,6 +50,9 @@ export interface NotePreview {
   createdAt: string;
   updatedAt: string;
   sentAt: string | null;
+  sentToPane: string | null;
+  sessionId: string | null;
+  agentType: AgentType | null;
 }
 
 export interface NotesFile {
@@ -86,9 +92,16 @@ export interface Cursor {
 
 export type CursorStyle = 'on' | 'after';
 
+export interface AgentHooks {
+  bound: boolean | null;  // null=never asked, true=bound, false=declined
+}
+
 export interface Config {
   cursor: {
     insertStyle: CursorStyle;
+  };
+  hooks: {
+    claude: AgentHooks;
   };
 }
 

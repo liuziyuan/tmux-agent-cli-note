@@ -64,6 +64,12 @@ class Tmux {
     'zsh', 'bash', 'fish', 'sh', 'dash', 'ksh', 'csh', 'tcsh', 'nu', 'pwsh', 'xonsh',
   ]);
 
+  private static readonly WRAPPERS = new Set([
+    'node', 'npx', 'npm', 'yarn', 'pnpm', 'bun',
+    'volta-shim', 'volta', 'nvm', 'fnm',
+    'deno', 'tsx', 'ts-node', 'bunx',
+  ]);
+
   private static readonly AGENT_BY_CMD: Array<{ test: (cmd: string) => boolean; info: AgentInfo }> = [
     { test: cmd => cmd.includes('claude'), info: { type: 'claude', label: 'Claude Code' } },
     { test: cmd => cmd.includes('opencode'), info: { type: 'opencode', label: 'OpenCode' } },
@@ -75,10 +81,13 @@ class Tmux {
   private static _detectAgent(paneId: string): AgentInfo | null {
     let cmd = '';
     try {
-      cmd = execSync(
-        `tmux display-message -t ${paneId} -p '#{pane_current_command}'`,
+      const raw = execSync(
+        `tmux display-message -t ${paneId} -p '#{pane_current_command} #{pane_dead}'`,
         { encoding: 'utf-8' }
-      ).trim().toLowerCase();
+      ).trim();
+      const parts = raw.split(' ');
+      cmd = parts.slice(0, -1).join(' ').toLowerCase();
+      if (parts[parts.length - 1] === '1') return null;
     } catch {
       /* ignore */
     }
@@ -93,7 +102,7 @@ class Tmux {
 
     // Tier 2: Claude Code standalone binary shows version as command name (e.g. "2.1.112")
     if (/^\d+\.\d+\.\d+$/.test(cmd)) {
-      const content = Tmux.capturePane(paneId);
+      const content = Tmux._captureRecent(paneId);
       if (content.includes('⏺')) {
         return { type: 'claude', label: 'Claude Code' };
       }
@@ -101,7 +110,7 @@ class Tmux {
 
     // Tier 3: content fallback for wrapper commands (volta-shim, node, npx, etc.)
     // Only check recent output to avoid stale scrollback matches
-    if (cmd && !Tmux.SHELLS.has(cmd)) {
+    if (Tmux.WRAPPERS.has(cmd)) {
       const bottom = Tmux._captureRecent(paneId);
       for (const { test, info } of Tmux.AGENT_BY_CMD) {
         if (test(bottom)) return info;
@@ -147,6 +156,20 @@ class Tmux {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  static getSessionId(paneId: string): string | null {
+    try {
+      const result = execSync(
+        `tmux show-option -pqt ${paneId} @agent-session-id`,
+        { encoding: 'utf-8' }
+      ).trim();
+      // Strip option name prefix if present (some tmux versions include it)
+      const value = result.replace(/^@agent-session-id\s+/, '');
+      return value || null;
+    } catch {
+      return null;
     }
   }
 }

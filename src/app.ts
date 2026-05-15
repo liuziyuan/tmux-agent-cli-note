@@ -1,12 +1,15 @@
 'use strict';
 
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { Screen, ANSI } from './screen';
 import { Store } from './store';
 import { Editor } from './editor';
 import { ListView } from './list-view';
 import Tmux from './tux';
-import { AppState, AgentPane, Config, MouseEvent } from './types';
-import { loadConfig } from './config';
+import { AppState, AgentPane, AgentType, Config, MouseEvent } from './types';
+import { loadConfig, setHooksBound } from './config';
 
 export class App {
   private readonly dir: string;
@@ -25,6 +28,8 @@ export class App {
   private _selectIdx: number = 0;
   private _config: Config;
   private _tmuxMouseOn: boolean;
+  private _hooksBound: boolean;  // resolved: true=bound, false=declined or never asked
+  private _pendingSend: { editor: Editor; paneId: string; label: string } | null = null;
 
   constructor(dir: string) {
     this.dir = dir;
@@ -32,6 +37,8 @@ export class App {
     this.store = new Store(dir);
     this._config = loadConfig();
     this._tmuxMouseOn = Tmux.isMouseEnabled();
+    this._hooksBound = this._config.hooks.claude.bound === true;
+    this._pendingSend = null;
   }
 
   run(): void {
@@ -291,6 +298,7 @@ export class App {
 
   private _showList(): void {
     this.state = AppState.LIST;
+    this._tryLinkSessions();
     const lv = new ListView(this.screen, this.store);
     lv.on('select', (id) => this._openEditor(id));
     lv.on('new', () => this._openNewEditor());
@@ -344,14 +352,64 @@ export class App {
       return;
     }
 
+    // Check hooks binding — prompt if never asked (only for claude agents)
+    const claudeAgents = agents.filter(a => a.type === 'claude');
+    const hasClaude = claudeAgents.length > 0;
+    if (hasClaude && this._config.hooks.claude.bound === null) {
+      if (agents.length === 1) {
+        this._pendingSend = { editor, paneId: agents[0].id, label: agents[0].label };
+      } else {
+        // For multiple agents, we'll resolve after selection
+        this._pendingSend = null;
+        this._selectAgents = agents;
+        this._selectEditor = editor;
+        this._selectContent = content;
+      }
+      this._showHooksPrompt();
+      return;
+    }
+
     if (agents.length === 1) {
-      this._doSend(editor, agents[0].id, agents[0].label);
+      this._doSend(editor, agents[0].id, agents[0].label, agents[0].type);
     } else {
-      // Multiple candidates — show selector
       this.state = AppState.SELECT;
       this._selectAgents = agents;
       this._selectEditor = editor;
       this._selectContent = content;
+      this._renderSelector();
+    }
+  }
+
+  private _showHooksPrompt(): void {
+    this.state = AppState.CONFIRM;
+    this.screen.drawConfirm('Enable Claude Code hooks for session tracking? (y/n)');
+  }
+
+  private _handleConfirm(key: string): void {
+    if (key === 'y' || key === 'Y') {
+      this._installHooks();
+      setHooksBound('claude', true);
+      this._hooksBound = true;
+      this._config.hooks.claude.bound = true;
+      this.screen.drawSuccess('Hooks enabled. Session tracking active.');
+    } else if (key === 'n' || key === 'N') {
+      setHooksBound('claude', false);
+      this._config.hooks.claude.bound = false;
+      this._hooksBound = false;
+      this.screen.drawCommandLine('');
+    } else {
+      return;
+    }
+
+    this.state = AppState.EDITOR;
+
+    if (this._pendingSend) {
+      const { editor, paneId, label } = this._pendingSend;
+      this._pendingSend = null;
+      this._doSend(editor, paneId, label, 'claude');
+    } else if (this._selectEditor && this._selectAgents.length > 1) {
+      this.state = AppState.SELECT;
+      this._selectIdx = 0;
       this._renderSelector();
     }
   }
@@ -408,7 +466,7 @@ export class App {
       const agent = this._selectAgents[this._selectIdx];
       this.state = AppState.EDITOR;
       if (this._selectEditor) {
-        this._doSend(this._selectEditor, agent.id, agent.label);
+        this._doSend(this._selectEditor, agent.id, agent.label, agent.type);
       }
       return;
     }
@@ -419,18 +477,77 @@ export class App {
       if (agent) {
         this.state = AppState.EDITOR;
         if (this._selectEditor) {
-          this._doSend(this._selectEditor, agent.id, agent.label);
+          this._doSend(this._selectEditor, agent.id, agent.label, agent.type);
         }
       }
     }
   }
 
-  private _doSend(editor: Editor, paneId: string, label: string): void {
+  private _tryLinkSessions(): void {
+    if (!this._hooksBound) return;
+    const notes = this.store.listNotes();
+    for (const note of notes) {
+      if (note.sentToPane && !note.sessionId) {
+        const sessionId = Tmux.getSessionId(note.sentToPane);
+        if (sessionId) {
+          this.store.linkSession(note.id, sessionId);
+        }
+      }
+    }
+  }
+
+  private _installHooks(): void {
+    const hookScript = this._resolveHookScript();
+    if (!hookScript) return;
+
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    let settings: Record<string, unknown>;
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    } catch {
+      settings = {};
+    }
+    if (!settings.hooks || typeof settings.hooks !== 'object') {
+      settings.hooks = {};
+    }
+    const hooks = settings.hooks as Record<string, unknown[]>;
+    if (!hooks.UserPromptSubmit) hooks.UserPromptSubmit = [];
+
+    const command = `${hookScript} UserPromptSubmit`;
+    const alreadyInstalled = hooks.UserPromptSubmit.some((entry: unknown) => {
+      if (typeof entry !== 'object' || entry === null) return false;
+      const e = entry as Record<string, unknown>;
+      if (!Array.isArray(e.hooks)) return false;
+      return e.hooks.some((h: unknown) => {
+        if (typeof h !== 'object' || h === null) return false;
+        return (h as Record<string, unknown>).command === command;
+      });
+    });
+
+    if (!alreadyInstalled) {
+      hooks.UserPromptSubmit.push({
+        matcher: '',
+        hooks: [{ type: 'command', command, async: true }],
+      });
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+    }
+  }
+
+  private _resolveHookScript(): string | null {
+    for (const rel of ['../hooks/set-agent-session-id.sh', '../../hooks/set-agent-session-id.sh']) {
+      const candidate = path.resolve(__dirname, rel);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  private _doSend(editor: Editor, paneId: string, label: string, agentType: AgentType): void {
     const content = editor.content.trim();
     const ok = Tmux.sendToPane(paneId, content);
     if (ok) {
       if (editor.noteId) {
-        this.store.markSent(editor.noteId);
+        const sessionId = (this._hooksBound && agentType === 'claude') ? Tmux.getSessionId(paneId) : null;
+        this.store.markSent(editor.noteId, paneId, sessionId, agentType);
       }
       this.screen.drawSuccess(`Sent to ${label}. Press Enter to continue.`);
       this._waitForEnter(() => {
@@ -457,10 +574,6 @@ export class App {
     this.state = AppState.WAIT_KEY;
     this._waitCallback = callback;
     this._waitEnterOnly = true;
-  }
-
-  private _handleConfirm(_key: string): void {
-    // Currently unused, but available for future confirm dialogs
   }
 
   private _quit(): never {

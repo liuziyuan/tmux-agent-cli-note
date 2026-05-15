@@ -116,6 +116,7 @@ export class Editor extends EventEmitter {
   private _pendingYank: boolean = false;
   private _undoStack: { lines: string[]; cursor: Cursor; scrollOffset: number; selection: { startRow: number; startCol: number; endRow: number; endCol: number } | null }[] = [];
   private _undoDepth: number = 50;
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Re-export for type checking
   static ANSI = ANSI;
@@ -339,6 +340,7 @@ export class Editor extends EventEmitter {
       // Ctrl+Z: undo
       if (this._undo()) {
         this.render();
+        this._scheduleSave();
       }
       return;
     }
@@ -346,6 +348,7 @@ export class Editor extends EventEmitter {
     if (key === '\x1b') {
       // Esc
       this._pendingAt = false;
+      this._cancelScheduledSave();
       this._save();
       this._setMode(EditorMode.NORMAL);
       return;
@@ -358,6 +361,7 @@ export class Editor extends EventEmitter {
         this._insertText(this._yankRegister);
       }
       this.render();
+      this._scheduleSave();
       return;
     }
 
@@ -368,6 +372,7 @@ export class Editor extends EventEmitter {
         this._backspace();
       }
       this.render();
+      this._scheduleSave();
       return;
     }
 
@@ -378,6 +383,7 @@ export class Editor extends EventEmitter {
       this._splitLine();
       this._adjustScroll();
       this.render();
+      this._scheduleSave();
       return;
     }
 
@@ -396,6 +402,7 @@ export class Editor extends EventEmitter {
       this._deleteSelection();
       this._insertChar(key);
       this.render();
+      this._scheduleSave();
       return;
     }
 
@@ -436,6 +443,7 @@ export class Editor extends EventEmitter {
         this._deleteCharUnderCursor();
       }
       this.render();
+      this._scheduleSave();
       return;
     }
     // Home / End
@@ -486,6 +494,7 @@ export class Editor extends EventEmitter {
       this._pushUndo();
       this._deleteWordForward();
       this.render();
+      this._scheduleSave();
       return;
     }
   }
@@ -538,6 +547,9 @@ export class Editor extends EventEmitter {
   }
 
   private _setMode(mode: EditorMode): void {
+    if (this.mode === EditorMode.INSERT) {
+      this._cancelScheduledSave();
+    }
     this.mode = mode;
     this._applyCursorShape(mode);
     this.render();
@@ -582,6 +594,21 @@ export class Editor extends EventEmitter {
   private _save(): void {
     if (this.noteId) {
       this.store.updateNote(this.noteId, this.content);
+    }
+  }
+
+  private _scheduleSave(): void {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this._save();
+    }, 1500);
+  }
+
+  private _cancelScheduledSave(): void {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
     }
   }
 
