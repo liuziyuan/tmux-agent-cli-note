@@ -11,6 +11,7 @@ A vim-like brainstorm note tool that runs inside tmux. Write notes, then send th
 - **Multi-agent support** — auto-detects all AI CLI panes, shows a selector when multiple are found
 - **CJK friendly** — proper display width handling for Chinese/Japanese/Korean characters
 - **Zero dependencies** — built with Node.js built-in modules only
+- **Session tracking** — links notes to Claude Code sessions via tmux hooks, shows session status in list view
 
 ## Requirements
 
@@ -33,6 +34,14 @@ note update
 ```
 
 Check for the latest version and update automatically.
+
+### `note setup-hooks` — Install Claude Code hooks
+
+```bash
+note setup-hooks
+```
+
+Install the SessionStart hook into `~/.claude/settings.json` to enable session tracking. This hook writes the Claude Code session ID to a tmux pane option, allowing notes to be linked to specific sessions.
 
 ## Usage
 
@@ -93,6 +102,9 @@ note
 2. Auto-detect AI agent panes in the current tmux window
 3. **One agent found** — content is sent immediately
 4. **Multiple agents found** — selector appears, press number to choose, `Esc` to cancel
+5. On first send to a Claude Code pane, you'll be prompted to enable hooks for session tracking
+   - Press `y` to install the hook (or run `note setup-hooks` manually)
+   - Press `n` to skip (won't prompt again)
 
 Text is pasted into the agent's input box. It is **not** auto-submitted — you can review and edit before pressing Enter in the agent pane.
 
@@ -117,7 +129,9 @@ Example:
       "content": "Your brainstorm text...",
       "createdAt": "2026-04-14T16:00:00Z",
       "updatedAt": "2026-04-14T16:05:00Z",
-      "sentAt": "2026-04-14T16:10:00Z"
+      "sentAt": "2026-04-14T16:10:00Z",
+      "sentToPane": "%5",
+      "sessionId": "abc123-def456"
     }
   ]
 }

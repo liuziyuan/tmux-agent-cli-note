@@ -11,6 +11,7 @@
 - **多 AI CLI 支持** — 自动检测同窗口所有 AI CLI pane，多个时弹出选择器
 - **中文友好** — 正确处理 CJK 字符的显示宽度和光标移动
 - **零依赖** — 仅使用 Node.js 内置模块
+- **会话追踪** — 通过 tmux hooks 将笔记关联到 Claude Code 会话，列表中显示会话状态
 
 ## 环境要求
 
@@ -33,6 +34,14 @@ note update
 ```
 
 检查最新版本并自动更新。
+
+### `note setup-hooks` — 安装 Claude Code hooks
+
+```bash
+note setup-hooks
+```
+
+安装 SessionStart hook 到 `~/.claude/settings.json`，启用会话追踪功能。该 hook 会将 Claude Code 会话 ID 写入 tmux pane 选项，使笔记能关联到具体会话。
 
 ## 使用方法
 
@@ -93,6 +102,9 @@ note
 2. 自动检测当前 tmux 窗口中的 AI CLI pane
 3. **只有一个** — 直接发送
 4. **有多个** — 弹出选择器，按数字选择，`Esc` 取消
+5. 首次发送到 Claude Code pane 时，会提示是否启用 hooks 进行会话追踪
+   - 按 `y` 安装 hook（也可手动运行 `note setup-hooks`）
+   - 按 `n` 跳过（不再提示）
 
 内容会粘贴到 AI CLI 的输入框中，**不会自动提交**，你可以在 AI CLI 端检查编辑后再按 Enter。
 
@@ -117,7 +129,9 @@ your-project/
       "content": "头脑风暴文本...",
       "createdAt": "2026-04-14T16:00:00Z",
       "updatedAt": "2026-04-14T16:05:00Z",
-      "sentAt": "2026-04-14T16:10:00Z"
+      "sentAt": "2026-04-14T16:10:00Z",
+      "sentToPane": "%5",
+      "sessionId": "abc123-def456"
     }
   ]
 }
