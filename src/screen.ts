@@ -95,7 +95,7 @@ export class Screen {
     this.writeAt(1, 1, title);
   }
 
-  drawStatusBar(mode: string, hint?: string, mouseOn?: boolean): void {
+  drawStatusBar(mode: string, hint?: string, mouseOn?: boolean, hooksBound?: boolean): void {
     const row = this.rows - 1;
     let modeLabel = '';
     if (mode === 'INSERT') {
@@ -116,7 +116,13 @@ export class Screen {
     } else if (mouseOn === false) {
       mouseLabel = `  ${ANSI.dim}Mouse:OFF${ANSI.reset}`;
     }
-    const content = modeLabel + '  ' + hintText + mouseLabel;
+    let hooksLabel = '';
+    if (hooksBound === true) {
+      hooksLabel = `  ${ANSI.fg.green}Hooks:ON${ANSI.reset}`;
+    } else if (hooksBound === false) {
+      hooksLabel = `  ${ANSI.dim}Hooks:OFF${ANSI.reset}`;
+    }
+    const content = modeLabel + '  ' + hintText + mouseLabel + hooksLabel;
     this.writeAt(row, 1, content);
   }
 

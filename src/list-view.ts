@@ -2,7 +2,7 @@
 
 import { EventEmitter } from 'events';
 import { basename } from 'path';
-import { ListViewEvents, NotePreview } from './types';
+import { ListViewEvents, NotePreview, AgentType } from './types';
 import { ANSI } from './screen';
 import { displayWidth } from './editor';
 import type { Screen } from './screen';
@@ -117,6 +117,15 @@ export class ListView extends EventEmitter {
     }
   }
 
+  private static readonly AGENT_LOGO: Record<AgentType, string> = {
+    claude: 'CC',
+    codex: 'CX',
+    gemini: 'GM',
+    copilot: 'CP',
+    opencode: 'OC',
+    unknown: '??',
+  };
+
   private _adjustScroll(): void {
     const visible = this.visibleLines;
     if (this.selectedIndex < this._scrollOffset) {
@@ -152,15 +161,27 @@ export class ListView extends EventEmitter {
         if (noteIdx < this.notes.length) {
           const note = this.notes[noteIdx];
           const selected = noteIdx === this.selectedIndex;
-          const sent = note.sentAt ? `${ANSI.fg.green}✓${ANSI.reset} ` : '  ';
+          // Agent + session: [CC]a1b2c3d or empty (12 chars)
+          let meta: string;
+          if (note.agentType) {
+            const logo = ListView.AGENT_LOGO[note.agentType] ?? '??';
+            const sid = note.sessionId ? note.sessionId.slice(-7) : '       ';
+            meta = `[${logo}]${sid} `;
+          } else {
+            meta = '            ';
+          }
           const idx = String(noteIdx + 1).padStart(2);
-          const time = new Date(note.updatedAt).toLocaleString('zh-CN', {
-            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-          });
-          // sent(2) + idx(2) + space(1) = 5 visible columns before preview
-          const timeWidth = displayWidth(time);
-          const maxPreviewWidth = this.screen.cols - 5 - timeWidth - 1;
-          // Truncate preview by display width
+          // Format time as YY/MM/DD HH:MM
+          const d = new Date(note.updatedAt);
+          const yy = String(d.getFullYear() % 100).padStart(2, '0');
+          const mo = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          const hh = String(d.getHours()).padStart(2, '0');
+          const mm = String(d.getMinutes()).padStart(2, '0');
+          const time = `${yy}/${mo}/${dd} ${hh}:${mm}`;
+          // Layout: idx(2) + space(1) + preview + meta(13) + time(14)
+          const fixedWidth = 2 + 1 + 12 + 14;
+          const maxPreviewWidth = this.screen.cols - fixedWidth;
           const raw = note.preview || '(empty)';
           let preview = '';
           let pw = 0;
@@ -172,11 +193,11 @@ export class ListView extends EventEmitter {
           }
 
           let line;
-          const padLen = Math.max(1, this.screen.cols - 5 - pw - timeWidth);
+          const padLen = Math.max(1, this.screen.cols - fixedWidth - pw);
           if (selected) {
-            line = `${ANSI.bg.reverse}${sent}${idx} ${preview}${' '.repeat(padLen)}${time}${ANSI.reset}`;
+            line = `${ANSI.bg.reverse}${idx} ${preview}${' '.repeat(padLen)}${meta}${time}${ANSI.reset}`;
           } else {
-            line = `${sent}${ANSI.dim}${idx}${ANSI.reset} ${preview}${' '.repeat(padLen)}${ANSI.dim}${time}${ANSI.reset}`;
+            line = `${idx} ${preview}${' '.repeat(padLen)}${meta}${time}`;
           }
           this.screen.writeAt(row, 1, line);
         } else {

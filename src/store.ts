@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import type { Note, NotePreview, NotesFile } from './types';
+import type { Note, NotePreview, NotesFile, AgentType } from './types';
 
 export class Store {
   public readonly dir: string;
@@ -26,7 +26,13 @@ export class Store {
     this._ensureDir();
     try {
       const raw = fs.readFileSync(this.noteFile, 'utf8');
-      return JSON.parse(raw) as NotesFile;
+      const data = JSON.parse(raw) as NotesFile;
+      for (const note of data.notes) {
+        if (note.sentToPane === undefined) note.sentToPane = null;
+        if (note.sessionId === undefined) note.sessionId = null;
+        if (note.agentType === undefined) note.agentType = null;
+      }
+      return data;
     } catch {
       return { directory: this.dir, notes: [] };
     }
@@ -45,6 +51,9 @@ export class Store {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       sentAt: null,
+      sentToPane: null,
+      sessionId: null,
+      agentType: null,
     };
     data.notes.unshift(note);
     this.save(data);
@@ -61,11 +70,23 @@ export class Store {
     return note;
   }
 
-  markSent(id: string): Note | null {
+  markSent(id: string, paneId: string, sessionId: string | null, agentType: AgentType | null): Note | null {
     const data = this.load();
     const note = data.notes.find(n => n.id === id);
     if (!note) return null;
     note.sentAt = new Date().toISOString();
+    note.sentToPane = paneId;
+    note.sessionId = sessionId ?? note.sessionId;
+    note.agentType = agentType;
+    this.save(data);
+    return note;
+  }
+
+  linkSession(id: string, sessionId: string): Note | null {
+    const data = this.load();
+    const note = data.notes.find(n => n.id === id);
+    if (!note) return null;
+    note.sessionId = sessionId;
     this.save(data);
     return note;
   }
@@ -89,6 +110,9 @@ export class Store {
       createdAt: n.createdAt,
       updatedAt: n.updatedAt,
       sentAt: n.sentAt,
+      sentToPane: n.sentToPane ?? null,
+      sessionId: n.sessionId ?? null,
+      agentType: n.agentType ?? null,
     }));
   }
 
