@@ -22,7 +22,7 @@ No test framework is set up.
 
 ## Architecture
 
-**Entry** (`bin/note.ts`): CLI argument parsing (`-v`, `-h`, `update`), tmux environment check, then delegates to App. The `update` command reads the current version from package.json and runs `npm install -g` for self-update.
+**Entry** (`bin/note.ts`): CLI argument parsing (`-v`, `-h`, `update`, `setup-hooks`), tmux environment check, then delegates to App. The `update` command reads the current version from package.json and runs `npm install -g` for self-update. The `setup-hooks` command installs Claude Code SessionStart hook into `~/.claude/settings.json` and marks hooks as bound in config.
 
 **App controller** (`src/app.ts`): State machine with states (LIST, EDITOR, CONFIRM, WAIT_KEY, SELECT). Owns the main event loop — reads raw stdin, buffers escape sequences via `_parseKeys` (handles bare Esc with a 50ms timer vs multi-byte escape sequences like `\x1b[A`), then dispatches to the active state's handler via `_dispatchKey`. All mode transitions and view lifecycle are managed here.
 
@@ -30,13 +30,13 @@ No test framework is set up.
 
 **List view** (`src/list-view.ts`): Note browser with scroll offset, delete confirmation (`confirmDelete` flag), and empty state. Same EventEmitter pattern as Editor — emits `select`, `new`, `quit`, `empty`.
 
-**Tmux integration** (`src/tux.ts`): Agent detection is a three-tier fallback: (1) check `pane_current_command` for known binary names, (2) inspect captured pane content for keywords, (3) look for `❯` prompt as a generic agent indicator. Sending uses `tmux set-buffer/load-buffer` + `paste-buffer` to handle multi-line text.
+**Tmux integration** (`src/tux.ts`): Agent detection is a three-tier fallback: (1) check `pane_current_command` for known binary names, (2) version-formatted commands (e.g. `2.1.142`) identified as Claude Code, (3) wrapper commands (volta-shim, node, npx) checked via captured pane content. Sending uses `tmux set-buffer/load-buffer` + `paste-buffer` to handle multi-line text. `getSessionId()` reads `@agent-session-id` from tmux pane user options — set by the Claude Code SessionStart hook via `hooks/set-agent-session-id.sh`.
 
 **Screen** (`src/screen.ts`): Terminal abstraction layer. Exports both a `Screen` class and a bare `ANSI` object (used directly by Editor and ListView for inline formatting). Layout: row 1 = title bar, rows 2..N-1 = content area, row N-1 = status bar, row N = command line. `contentHeight()` returns `rows - 3`.
 
-**Store** (`src/store.ts`): Per-directory JSON persistence in `.note/notes.json`. Reads/writes the full file on every operation (no incremental writes). Note IDs are 6-char hex from `crypto.randomBytes(3)`.
+**Store** (`src/store.ts`): Per-directory JSON persistence in `.note/notes.json`. Reads/writes the full file on every operation (no incremental writes). Note IDs are 6-char hex from `crypto.randomBytes(3)`. Notes track `sentToPane` (tmux pane ID) and `sessionId` (Claude Code session ID). `markSent()` writes both fields. Backward compatible — missing fields default to `null`.
 
-**Config** (`src/config.ts`): User config at `~/.note-config.json`. Currently only supports `cursor.insertStyle` (`"on"` for block cursor in insert mode, `"after"` for bar cursor). Falls back to defaults on missing/invalid config.
+**Config** (`src/config.ts`): User config at `~/.note-config.json`. Supports `cursor.insertStyle` (`"on"` for block cursor in insert mode, `"after"` for bar cursor) and `hooks.claude.bound` (`true`/`false`/`null` — `null` means never prompted). `setHooksBound()` and `isHooksBound()` manage the hooks binding state. Falls back to defaults on missing/invalid config.
 
 **Types** (`src/types.ts`): All interfaces and const enums. `EditorMode` and `AppState` are const enums but Editor re-declares EditorMode as a plain object to avoid const enum inlining issues across files.
 
