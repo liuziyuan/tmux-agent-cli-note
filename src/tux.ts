@@ -102,10 +102,7 @@ class Tmux {
 
     // Tier 2: Claude Code standalone binary shows version as command name (e.g. "2.1.112")
     if (/^\d+\.\d+\.\d+$/.test(cmd)) {
-      const content = Tmux._captureRecent(paneId);
-      if (content.includes('⏺')) {
-        return { type: 'claude', label: 'Claude Code' };
-      }
+      return { type: 'claude', label: 'Claude Code' };
     }
 
     // Tier 3: content fallback for wrapper commands (volta-shim, node, npx, etc.)
